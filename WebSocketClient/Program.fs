@@ -2,7 +2,6 @@
 
 open System
 open System.Net.WebSockets
-open System.Threading
 open Types
 open Common
 open Common.ClientAsync
@@ -10,25 +9,30 @@ open Common.ClientAsync
 [<EntryPoint>]
 let main argv =
     
+    // basic setup
     let cws = connectClientWebSocket ()
     let e, eStream = createIncomingMsgEvent ()
-    messageLoop e cws |> Async.Start
     
+    // basic event stream subscription to print messages
     eStream 
     |> Observable.subscribe (fun m -> m |> extractIncomingMsg |> printfn "%s" ) 
     |> ignore
 
-    (*let rec messageLoop () =
-        printf "Message $> "
-        let msg = Console.ReadLine()
-        handleOutgoingMsg {outgoingMsgType = WebSocketMessageType.Text; outgoingMsg = msg |> TextMsg} cws
-        //printfn "Sending..."
-        //[0..9999]
-        //|> List.iter (fun _ -> handleOutgoingMsg {outgoingMsgType = WebSocketMessageType.Text; outgoingMsg = msg |> TextMsg} cws)
-        //printfn "finished"
-        messageLoop ()
-    messageLoop ()*)
+
+    // basic little test loop
+    let rec messageLoop () =
+        printf "Command: "
+        match Console.ReadKey().KeyChar with
+        | 'S' ->
+            printfn ""
+            printf "Message $> "
+            let msg = Console.ReadLine()
+            sendWebSocketMsg (msg |> TextMsg) cws
+            messageLoop ()
+        | 'E' -> cws.State |> printfn "%A"; messageLoop ()
+        | 'Q' -> cws.Dispose()
+        | _ -> messageLoop ()
+    messageLoop ()
     
-    Console.ReadKey() |> ignore
-    cws.Dispose()
+    
     0 // return an integer exit code

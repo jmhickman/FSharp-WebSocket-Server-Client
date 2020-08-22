@@ -23,17 +23,29 @@ let createIncomingMsgEvent () =
     let incomingMsgEvt = new Event<CWebSocketMessage>()
     incomingMsgEvt, incomingMsgEvt.Publish
 
+
+let closeWebSocket (ws: WebSocket) = 
+    ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None) 
+    |> Async.AwaitTask
+    |> Async.Start
+
 module ClientAsync =
     
-    // Straight forward connection code. Hopefully doesn't have an hidden gotchas like HttpListener did
+    // Straight forward connection code, hardcoded for now
     let connectClientWebSocket () =    
         let cws = new ClientWebSocket()
         let uriAddress = "ws://localhost:5000/" |> Uri
-        cws.ConnectAsync(uriAddress, CancellationToken.None) |> Async.AwaitTask |> Async.Start
         printfn "Connecting..."
+        cws.ConnectAsync(uriAddress, CancellationToken.None) 
+        |> Async.AwaitTask 
+        |> Async.RunSynchronously // wait for it, not waiting caused weird Abort issues
+        printfn "Connected"
         cws
 
-
+    // Beginning of the receive pipeline. Sends along a dummy record if we 
+    // hit the exception. I don't know if I need to do something with the 
+    // buffer in that case or not. When a logger gets plugged in I won't just
+    // drop the exception into the void anymore.
     let tryReceiveMsg (ws: ClientWebSocket) : ServerMessageIncoming =
         let buf = Array.init 65536 byte |> ArraySegment<byte>
         try
@@ -43,9 +55,7 @@ module ClientAsync =
                 |> Async.RunSynchronously
             {receivedMsg = res; buffer = buf}        
         with _ -> 
-            ws.CloseAsync(WebSocketCloseStatus.Empty, "", CancellationToken.None) 
-            |> Async.AwaitTask
-            |> Async.Start
+            closeWebSocket ws
             {receivedMsg = WebSocketReceiveResult(0, WebSocketMessageType.Close, true); buffer = buf}
         
     
@@ -59,7 +69,7 @@ module ClientAsync =
 
     
     // Proc the event that will eventually get hooked into something useful
-    let procMessageEvent (incomingMsgEvt: Event<CWebSocketMessage> ) msg =
+    let procMessageEvent (incomingMsgEvt: Event<CWebSocketMessage>) msg =
         match msg with
         | TextMsg m -> incomingMsgEvt.Trigger(m |> TextMsg)
         | BinaryMsg m -> incomingMsgEvt.Trigger(m |> BinaryMsg)
@@ -73,7 +83,9 @@ module ClientAsync =
         |> procMessageEvent evt
 
 
-
+    // Sending Messages is simpler than receiving them! I'm not sure if 
+    // overloading NullMsg for Closed is smart, but it's at least symmetric at
+    // the time of writing.
     let sendWebSocketMsg outMsg (ws: ClientWebSocket) =
         match outMsg with
         | BinaryMsg m ->
@@ -82,16 +94,13 @@ module ClientAsync =
          | TextMsg m -> 
             let arr = packStringBytes m
             ws.SendAsync(arr, WebSocketMessageType.Text, true, CancellationToken.None) |> Async.AwaitTask |> ignore
-        | NullMsg _ -> 
-            ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "CLOSED!", CancellationToken.None) 
-            |> Async.AwaitTask 
-            |> Async.Start
+        | NullMsg _ -> closeWebSocket ws
 
-
+    // Simpler than the server-side code for sure.
     let messageLoop (e: Event<CWebSocketMessage>) (ws: ClientWebSocket) = async {
-        
-        //let sctx = {websocket = ws; guid = Guid.NewGuid()}
         Seq.initInfinite (messagePipe e ws) 
         |> Seq.takeWhile (fun _ -> ws.State = WebSocketState.Open )
         |> Seq.iter (fun _ -> ())
+        
+        closeWebSocket ws
         }

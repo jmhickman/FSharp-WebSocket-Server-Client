@@ -5,14 +5,16 @@ open System.Net.WebSockets
 open System.Text
 open System.Threading
 open System.Threading.Tasks
-open Microsoft.AspNetCore.Http
 open Microsoft.AspNetCore.Builder
 
-//open Microsoft.AspNetCore.WebSockets
 
 open Types
 
-// convenience functions for dealing with WebSocket messages
+//
+// Common functions for WebSocket server process
+//
+
+// Convenience functions for dealing with WebSocket messages
 let unpackStringBytes bytearr count = Encoding.UTF8.GetString (bytearr, 0, count)
 
 let packStringBytes (s: string) = s |> Encoding.UTF8.GetBytes |> ArraySegment<byte>
@@ -23,6 +25,16 @@ let extractIncomingMsg (msg: CWebSocketMessage) =
     | BinaryMsg b -> BitConverter.ToString b
     | NullMsg () -> ""
 
+
+let closeWebSocket (ws: WebSocket) = 
+    ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None) 
+    |> Async.AwaitTask
+    |> Async.Start
+
+
+// Create events and event streams for new Http/WebSocket connections, ending
+// Http/WebSocket connections, and when a message has been processed and 
+// needs to travel up to a higher level of the program.
 let createNewEvts () = 
     let e = new Event<ConnectionContext>()
     e, e.Publish
@@ -35,38 +47,54 @@ let createIncomingMsgEvts () =
     let e = new Event<CWebSocketMessage>()
     e, e.Publish
 
-// Barebones state tracking for ServerContexts. Eventually will allow actual
-// sending of messages!
+
+// Barebones state tracking for ConnectionContexts. Implemented with a thread
+// safe collection.
 module WebSocketContextTracker = 
 
     open System.Collections.Concurrent
 
     let initCtxTracker () = new ConcurrentDictionary<Guid, ConnectionContext>()
     
+    // GetOrAdd returns the added obj, or the existing one if there's a bounce
+    // and I don't want the thing in either case, hence the ignore
     let insertCtx (cdict: ConcurrentDictionary<Guid, ConnectionContext>) (ctx: ConnectionContext) = 
-        cdict.GetOrAdd (ctx.guid, ctx) |> ignore
-        ctx.guid.ToString() |> printfn "Added context with designator %s to the tracker..."
-     
-     
+        (ctx.guid, ctx) 
+        |> cdict.GetOrAdd 
+        |> ignore
+    
+    
+    // Dumps the current set of connection client GUIDs to the console
     let pollCtxTracker (cdict: ConcurrentDictionary<Guid, ConnectionContext>) =
         printfn "Tracker contains the following GUIDs:"
-        cdict.Keys
-        |> Seq.iter (fun g -> g.ToString() |> printfn "%s")
+        cdict.Keys |> Seq.iter (fun g -> g.ToString() |> printfn "%s")
         
-
+    
+    // Evict a context when the message logic detects it has closed the connection
     let removeCtx (cdict: ConcurrentDictionary<Guid, ConnectionContext>) (ctx: ConnectionContext) =
-        let ret = ctx.guid |> fun g ->  cdict.TryRemove g
-        printfn "removed: %b" (fst ret)
+        ctx.guid 
+        |> fun g -> cdict.TryRemove g
+        |> ignore
+
+    
+    // The server should close the connections if it knows it's closing
+    let killAllCtx (cdict: ConcurrentDictionary<Guid, ConnectionContext>) =
+        let arr = cdict.ToArray()
+        [for i in (cdict.ToArray()) do yield i]
+        |> List.iter(fun x -> 
+            let ws = x.Value.websocket
+            ws.CloseAsync(WebSocketCloseStatus.EndpointUnavailable, "", CancellationToken.None)
+            |> Async.AwaitTask
+            |> fun x -> Async.RunSynchronously(x, 500)) //kinda gross
 
 
-// Home of all of the listener and async message logic
+// Home of all of the asp.net core server and message logic
 module Server = 
-    open WebSocketContextTracker
-
-    // Beginning of the receive pipeline. Mints a record containing what the
-    // next step needs to work. Sends along a dummy record if we hit the 
-    // exception. I don't know if I need to do something with the buffer in
-    // that case or not.
+    
+    // Beginning of the receive pipeline. Sends along a dummy record if we 
+    // hit the exception. I don't know if I need to do something with the 
+    // buffer in that case or not. When a logger gets plugged in I won't just
+    // drop the exception into the void anymore.
     let tryReceiveMsg (ws: WebSocket) : ServerMessageIncoming =
         let buf = Array.init 65536 byte |> ArraySegment<byte>
         try
@@ -76,9 +104,7 @@ module Server =
                 |> Async.RunSynchronously
             {receivedMsg = res; buffer = buf}        
         with _ -> 
-            ws.CloseAsync(WebSocketCloseStatus.Empty, "", CancellationToken.None) 
-            |> Async.AwaitTask
-            |> Async.Start
+            closeWebSocket ws
             {receivedMsg = WebSocketReceiveResult(0, WebSocketMessageType.Close, true); buffer = buf}
         
     
@@ -113,31 +139,40 @@ module Server =
         match outMsg with
         | BinaryMsg m ->
             let arr = m |> ArraySegment<byte>
-            ws.SendAsync(arr, WebSocketMessageType.Binary, true, CancellationToken.None) |> Async.AwaitTask |> ignore
+            ws.SendAsync (arr, WebSocketMessageType.Binary, true, CancellationToken.None) |> Async.AwaitTask |> ignore
          | TextMsg m -> 
             let arr = packStringBytes m
-            ws.SendAsync(arr, WebSocketMessageType.Text, true, CancellationToken.None) |> Async.AwaitTask |> ignore
-        | NullMsg _ -> 
-            ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "CLOSED!", CancellationToken.None) 
-            |> Async.AwaitTask 
-            |> Async.Start
+            ws.SendAsync (arr, WebSocketMessageType.Text, true, CancellationToken.None) |> Async.AwaitTask |> ignore
+        | NullMsg _ -> closeWebSocket ws
         
     
-    // Extracts WebSocket, procs event for context creation, and starts
-    // the message spinner pieline. Procs another event when the context
-    // closes
+    // Extracts WebSocket and starts the message spinner pieline.
+    // Procs another event when the context closes. Proc at the beginning and 
+    // end for inclusion and eviction from the context tracker.
+    // There is a spinner running for each active context so long as the 
+    // context is alive.
     let messageLoop (e: EventBundle) (ws: WebSocket) = async {
+        let cctx = {websocket = ws; guid = Guid.NewGuid ()}
+        e.newContextEvt.Trigger cctx |> ignore
         
-        let sctx = {websocket = ws; guid = Guid.NewGuid()}
-        e.newContextEvt.Trigger(sctx) |> ignore
-        
+        // Primary messaging loop spinner
+        // Weird-looking empty `iter` to 'pull' new websockets through the
+        // pipeline
         Seq.initInfinite (messagePipe e.incomingMsgEvt ws) 
         |> Seq.takeWhile (fun _ -> ws.State = WebSocketState.Open )
         |> Seq.iter (fun _ -> ())
         
-        e.endContextEvt.Trigger(sctx)|> ignore
+        closeWebSocket ws 
+        e.endContextEvt.Trigger cctx |> ignore
         }
 
+
+// Container for the worst of the object programming.
+// Event handlers are initialized here as well as the context tracker
+module ServerStartup =
+    
+    open WebSocketContextTracker
+    open Server
 
     let newCtxEvt, newCtxEvtStream = createNewEvts ()
     let endCtxEvt, endCtxEvtStream = createEndEvts ()
@@ -146,11 +181,15 @@ module Server =
     
     newCtxEvtStream |> Observable.subscribe (insertCtx wsctxtracker) |> ignore
     endCtxEvtStream |> Observable.subscribe (removeCtx wsctxtracker)  |> ignore
-    incomingMsgEvtStream |> Observable.subscribe (fun m -> m |> extractIncomingMsg |> printfn "%s" ) |> ignore
+    incomingMsgEvtStream |> Observable.subscribe (fun m -> m |> extractIncomingMsg |> printfn "-%s" ) |> ignore
     
-    let evtbundle = {newContextEvt = newCtxEvt; endContextEvt = endCtxEvt; incomingMsgEvt = incomingMsgEvt}
+    let evtbundle = {
+        newContextEvt = newCtxEvt
+        endContextEvt = endCtxEvt
+        incomingMsgEvt = incomingMsgEvt
+        }
     
-    
+    // Ugh
     type Startup() = 
         member this.Configure (app : IApplicationBuilder) = 
             let wso = new WebSocketOptions()
