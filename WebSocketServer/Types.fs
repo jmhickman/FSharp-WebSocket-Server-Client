@@ -5,9 +5,9 @@ open System.Net.WebSockets
 
 
 type CWebSocketMessage = 
-    | TextMsg of string
+    | TextMsg   of string
     | BinaryMsg of byte array
-    | NullMsg of unit
+    | NullMsg   of unit
 
 
 type ConnectionContext = {
@@ -18,11 +18,11 @@ type ConnectionContext = {
 
 type ServerMessageIncoming = {
     receivedMsg : WebSocketReceiveResult
-    buffer : ArraySegment<byte>
+    buffer      : ArraySegment<byte>
     }
 
 type EventBundle = {
-    newContextEvt : Event<ConnectionContext>
-    endContextEvt : Event<ConnectionContext>
+    newContextEvt  : Event<ConnectionContext>
+    endContextEvt  : Event<ConnectionContext>
     incomingMsgEvt : Event<CWebSocketMessage>
     }

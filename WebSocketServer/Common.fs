@@ -7,7 +7,6 @@ open System.Threading
 open System.Threading.Tasks
 open Microsoft.AspNetCore.Builder
 
-
 open Types
 
 //
@@ -19,11 +18,20 @@ let unpackStringBytes bytearr count = Encoding.UTF8.GetString (bytearr, 0, count
 
 let packStringBytes (s: string) = s |> Encoding.UTF8.GetBytes |> ArraySegment<byte>
 
+let crlf (s: string) = 
+    Console.SetCursorPosition((Console.CursorLeft - 1), Console.CursorTop)
+    Console.Write(s)
+
+
 let extractIncomingMsg (msg: CWebSocketMessage) = 
     match msg with 
-    | TextMsg s -> s
+    | TextMsg s   -> s
     | BinaryMsg b -> BitConverter.ToString b
-    | NullMsg () -> ""
+    | NullMsg ()  -> ""
+
+
+let CSendAsync (ws: WebSocket) (arr: ArraySegment<byte>) = 
+    ws.SendAsync (arr, WebSocketMessageType.Binary, true, CancellationToken.None) |> Async.AwaitTask |> ignore
 
 
 let closeWebSocket (ws: WebSocket) = 
@@ -32,6 +40,12 @@ let closeWebSocket (ws: WebSocket) =
     |> Async.Start
 
 
+let closeWebSocketA (ws: WebSocket) = async {
+    do! ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None) |> Async.AwaitTask
+    ws.Dispose()
+    }
+    
+
 // Create events and event streams for new Http/WebSocket connections, ending
 // Http/WebSocket connections, and when a message has been processed and 
 // needs to travel up to a higher level of the program.
@@ -39,9 +53,11 @@ let createNewEvts () =
     let e = new Event<ConnectionContext>()
     e, e.Publish
 
+
 let createEndEvts () = 
     let e = new Event<ConnectionContext>()
     e, e.Publish
+
 
 let createIncomingMsgEvts () =
     let e = new Event<CWebSocketMessage>()
@@ -51,7 +67,6 @@ let createIncomingMsgEvts () =
 // Barebones state tracking for ConnectionContexts. Implemented with a thread
 // safe collection.
 module WebSocketContextTracker = 
-
     open System.Collections.Concurrent
 
     let initCtxTracker () = new ConcurrentDictionary<Guid, ConnectionContext>()
@@ -75,17 +90,19 @@ module WebSocketContextTracker =
         ctx.guid 
         |> fun g -> cdict.TryRemove g
         |> ignore
+        ctx.websocket.Dispose()
 
     
     // The server should close the connections if it knows it's closing
+    // Enumerate all WebSocket connections, and parallelize their closure
     let killAllCtx (cdict: ConcurrentDictionary<Guid, ConnectionContext>) =
-        let arr = cdict.ToArray()
+        printfn "inside killing"
         [for i in (cdict.ToArray()) do yield i]
-        |> List.iter(fun x -> 
-            let ws = x.Value.websocket
-            ws.CloseAsync(WebSocketCloseStatus.EndpointUnavailable, "", CancellationToken.None)
-            |> Async.AwaitTask
-            |> fun x -> Async.RunSynchronously(x, 500)) //kinda gross
+        |> List.map(fun x  -> x.Value.websocket)
+        |> List.map(fun ws -> closeWebSocketA ws)
+        |> Async.Parallel
+        |> Async.RunSynchronously
+            
 
 
 // Home of all of the asp.net core server and message logic
@@ -111,18 +128,18 @@ module Server =
     // Simple matching based on the message type, and packing of the message
     let sortAndPackMsg smsg : CWebSocketMessage =
         match smsg.receivedMsg.MessageType with
-        | WebSocketMessageType.Close -> () |> NullMsg
-        | WebSocketMessageType.Text -> unpackStringBytes smsg.buffer.Array smsg.receivedMsg.Count |> TextMsg
+        | WebSocketMessageType.Close  -> () |> NullMsg
+        | WebSocketMessageType.Text   -> unpackStringBytes smsg.buffer.Array smsg.receivedMsg.Count |> TextMsg
         | WebSocketMessageType.Binary -> Array.truncate smsg.receivedMsg.Count smsg.buffer.Array |> BinaryMsg
-        | _ -> () |> NullMsg
+        | _                           -> () |> NullMsg
 
     
     // Proc the event that will eventually get hooked into something useful
     let procMessageEvent (incomingMsgEvt: Event<CWebSocketMessage> ) msg =
         match msg with
-        | TextMsg m -> incomingMsgEvt.Trigger(m |> TextMsg)
+        | TextMsg m   -> incomingMsgEvt.Trigger(m |> TextMsg)
         | BinaryMsg m -> incomingMsgEvt.Trigger(m |> BinaryMsg)
-        | NullMsg u -> incomingMsgEvt.Trigger(u |> NullMsg)
+        | NullMsg u   -> incomingMsgEvt.Trigger(u |> NullMsg)
         
     
     // Assemble the pipe via a binding so I can hook the spinner to it
@@ -139,10 +156,10 @@ module Server =
         match outMsg with
         | BinaryMsg m ->
             let arr = m |> ArraySegment<byte>
-            ws.SendAsync (arr, WebSocketMessageType.Binary, true, CancellationToken.None) |> Async.AwaitTask |> ignore
-         | TextMsg m -> 
+            CSendAsync ws arr
+         | TextMsg m  -> 
             let arr = packStringBytes m
-            ws.SendAsync (arr, WebSocketMessageType.Text, true, CancellationToken.None) |> Async.AwaitTask |> ignore
+            CSendAsync ws arr
         | NullMsg _ -> closeWebSocket ws
         
     
@@ -156,40 +173,39 @@ module Server =
         e.newContextEvt.Trigger cctx |> ignore
         
         // Primary messaging loop spinner
-        // Weird-looking empty `iter` to 'pull' new websockets through the
-        // pipeline
         Seq.initInfinite (messagePipe e.incomingMsgEvt ws) 
-        |> Seq.takeWhile (fun _ -> ws.State = WebSocketState.Open )
-        |> Seq.iter (fun _ -> ())
-        
+        |> Seq.find (fun _ -> ws.State <> WebSocketState.Open)
         closeWebSocket ws 
         e.endContextEvt.Trigger cctx |> ignore
         }
 
 
-// Container for the worst of the object programming.
-// Event handlers are initialized here as well as the context tracker
+// Container for the worst of the object programming. 
+// Ceremony will increase until morale improves
+// Event handlers and the context tracker are initialized here 
 module ServerStartup =
-    
     open WebSocketContextTracker
     open Server
 
-    let newCtxEvt, newCtxEvtStream = createNewEvts ()
-    let endCtxEvt, endCtxEvtStream = createEndEvts ()
-    let incomingMsgEvt, incomingMsgEvtStream = createIncomingMsgEvts()
     let wsctxtracker = initCtxTracker ()
     
-    newCtxEvtStream |> Observable.subscribe (insertCtx wsctxtracker) |> ignore
-    endCtxEvtStream |> Observable.subscribe (removeCtx wsctxtracker)  |> ignore
-    incomingMsgEvtStream |> Observable.subscribe (fun m -> m |> extractIncomingMsg |> printfn "-%s" ) |> ignore
+    let newCtxEvt, newCtxEvtStream           = createNewEvts () 
+    let endCtxEvt, endCtxEvtStream           = createEndEvts ()
+    let incomingMsgEvt, incomingMsgEvtStream = createIncomingMsgEvts ()
+    
+    newCtxEvtStream      |> Observable.subscribe (insertCtx wsctxtracker) |> ignore
+    endCtxEvtStream      |> Observable.subscribe (removeCtx wsctxtracker)  |> ignore
+    incomingMsgEvtStream |> Observable.subscribe (fun m -> m |> extractIncomingMsg |> printfn "%s" ) |> ignore
     
     let evtbundle = {
-        newContextEvt = newCtxEvt
-        endContextEvt = endCtxEvt
+        newContextEvt  = newCtxEvt
+        endContextEvt  = endCtxEvt
         incomingMsgEvt = incomingMsgEvt
         }
     
     // Ugh
+    // I have no use for middleware at the moment, hence the use of `Run` and
+    // nothing else
     type Startup() = 
         member this.Configure (app : IApplicationBuilder) = 
             let wso = new WebSocketOptions()

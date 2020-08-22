@@ -10,6 +10,16 @@ type CWebSocketMessage =
     | NullMsg of unit
 
 
+type ConnectionAttempt =
+    | ConnectedSocket of ClientWebSocket
+    | Dead of unit
+
+
+type ConnectionAttemptResult = {
+    cws : ClientWebSocket
+    died : bool
+    }
+
 type ConnectionContext = {
     websocket : ClientWebSocket
     guid : Guid

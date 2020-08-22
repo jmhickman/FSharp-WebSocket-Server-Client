@@ -1,23 +1,32 @@
 ﻿module Common
 
 open System
-open System.Net
 open System.Net.WebSockets
 open System.Text
 open System.Threading
 
 open Types
 
-// convenience functions for dealing with WebSocket messages
+// convenience functions used throughout
 let unpackStringBytes bytearr count = Encoding.UTF8.GetString(bytearr, 0, count)
 
 let packStringBytes (s: string) = s |> Encoding.UTF8.GetBytes |> ArraySegment<byte>
 
+let crlf (s: string) = 
+    Console.SetCursorPosition((Console.CursorLeft - 1), Console.CursorTop)
+    Console.Write(s)
+
+
 let extractIncomingMsg (msg: CWebSocketMessage) = 
     match msg with 
-    | TextMsg s -> s
+    | TextMsg s   -> s
     | BinaryMsg b -> BitConverter.ToString b
-    | NullMsg () -> "" 
+    | NullMsg ()  -> "" 
+
+
+let CSendAsync (ws: WebSocket) (arr: ArraySegment<byte>) = 
+    ws.SendAsync (arr, WebSocketMessageType.Binary, true, CancellationToken.None) |> Async.AwaitTask |> ignore
+
 
 let createIncomingMsgEvent () = 
     let incomingMsgEvt = new Event<CWebSocketMessage>()
@@ -29,18 +38,41 @@ let closeWebSocket (ws: WebSocket) =
     |> Async.AwaitTask
     |> Async.Start
 
+
 module ClientAsync =
     
-    // Straight forward connection code, hardcoded for now
-    let connectClientWebSocket () =    
-        let cws = new ClientWebSocket()
-        let uriAddress = "ws://localhost:5000/" |> Uri
-        printfn "Connecting..."
-        cws.ConnectAsync(uriAddress, CancellationToken.None) 
-        |> Async.AwaitTask 
-        |> Async.RunSynchronously // wait for it, not waiting caused weird Abort issues
-        printfn "Connected"
-        cws
+    // try to connect to the indicated server
+    let connectClientWebSocket ip port =    
+        let connectString = "ws://" + ip + ":" + port + "/" |> Uri
+                 
+        let connectloop delay = async {
+            printfn "Connecting..."
+            let cws = new ClientWebSocket()
+            do! Async.Sleep (delay * 1500)
+            try
+                do! cws.ConnectAsync(connectString, CancellationToken.None) |> Async.AwaitTask
+                return cws |> ConnectedSocket
+            with _ -> 
+                return cws.Dispose() |> Dead
+            }
+        
+        // the `tryFind` is kind ugly, but it evades exception handling
+        // This is a barebones semi-lame reconnection attempt function
+        let res = 
+            {0..2}
+            |> Seq.map(fun x -> connectloop x |> Async.RunSynchronously)
+            |> Seq.tryFind (fun x -> 
+                match x with
+                | Dead _            -> false
+                | ConnectedSocket _ -> true)
+
+        match res with    
+        | Some connection -> 
+            match connection with
+            | Dead _            -> {cws = new ClientWebSocket(); died = true}
+            | ConnectedSocket c -> {cws = c; died = false}
+        | None -> {cws = new ClientWebSocket(); died = true}
+
 
     // Beginning of the receive pipeline. Sends along a dummy record if we 
     // hit the exception. I don't know if I need to do something with the 
@@ -48,12 +80,13 @@ module ClientAsync =
     // drop the exception into the void anymore.
     let tryReceiveMsg (ws: ClientWebSocket) : ServerMessageIncoming =
         let buf = Array.init 65536 byte |> ArraySegment<byte>
+            
         try
             let res = 
                 ws.ReceiveAsync(buf, CancellationToken.None)
                 |> Async.AwaitTask
                 |> Async.RunSynchronously
-            {receivedMsg = res; buffer = buf}        
+            {receivedMsg = res; buffer = buf}       
         with _ -> 
             closeWebSocket ws
             {receivedMsg = WebSocketReceiveResult(0, WebSocketMessageType.Close, true); buffer = buf}
@@ -62,8 +95,8 @@ module ClientAsync =
     // Simple matching based on the message type, and packing of the message
     let sortAndPackMsg smsg : CWebSocketMessage =
         match smsg.receivedMsg.MessageType with
-        | WebSocketMessageType.Close -> () |> NullMsg
-        | WebSocketMessageType.Text -> unpackStringBytes smsg.buffer.Array smsg.receivedMsg.Count |> TextMsg
+        | WebSocketMessageType.Close  -> () |> NullMsg
+        | WebSocketMessageType.Text   -> unpackStringBytes smsg.buffer.Array smsg.receivedMsg.Count |> TextMsg
         | WebSocketMessageType.Binary -> Array.truncate smsg.receivedMsg.Count smsg.buffer.Array |> BinaryMsg
         | _ -> () |> NullMsg
 
@@ -71,9 +104,9 @@ module ClientAsync =
     // Proc the event that will eventually get hooked into something useful
     let procMessageEvent (incomingMsgEvt: Event<CWebSocketMessage>) msg =
         match msg with
-        | TextMsg m -> incomingMsgEvt.Trigger(m |> TextMsg)
+        | TextMsg m   -> incomingMsgEvt.Trigger(m |> TextMsg)
         | BinaryMsg m -> incomingMsgEvt.Trigger(m |> BinaryMsg)
-        | NullMsg u -> incomingMsgEvt.Trigger(u |> NullMsg)
+        | NullMsg u   -> incomingMsgEvt.Trigger(u |> NullMsg)
         
     
     // Assemble the pipe via a binding so I can hook the spinner to it
@@ -90,17 +123,16 @@ module ClientAsync =
         match outMsg with
         | BinaryMsg m ->
             let arr = m |> ArraySegment<byte>
-            ws.SendAsync(arr, WebSocketMessageType.Binary, true, CancellationToken.None) |> Async.AwaitTask |> ignore
-         | TextMsg m -> 
+            CSendAsync ws arr
+         | TextMsg m  -> 
             let arr = packStringBytes m
-            ws.SendAsync(arr, WebSocketMessageType.Text, true, CancellationToken.None) |> Async.AwaitTask |> ignore
-        | NullMsg _ -> closeWebSocket ws
+            CSendAsync ws arr
+        | NullMsg _   -> closeWebSocket ws
+
 
     // Simpler than the server-side code for sure.
     let messageLoop (e: Event<CWebSocketMessage>) (ws: ClientWebSocket) = async {
         Seq.initInfinite (messagePipe e ws) 
-        |> Seq.takeWhile (fun _ -> ws.State = WebSocketState.Open )
-        |> Seq.iter (fun _ -> ())
-        
+        |> Seq.find (fun _ -> ws.State <> WebSocketState.Open)
         closeWebSocket ws
         }
