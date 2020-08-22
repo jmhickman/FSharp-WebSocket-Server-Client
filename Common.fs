@@ -1,182 +1,165 @@
 ﻿module Common
 
 open System
-open System.Net
 open System.Net.WebSockets
 open System.Text
 open System.Threading
+open System.Threading.Tasks
+open Microsoft.AspNetCore.Http
+open Microsoft.AspNetCore.Builder
+
+//open Microsoft.AspNetCore.WebSockets
 
 open Types
 
 // convenience functions for dealing with WebSocket messages
-let unpackStringBytes bytearr count = Encoding.UTF8.GetString(bytearr, 0, count)
+let unpackStringBytes bytearr count = Encoding.UTF8.GetString (bytearr, 0, count)
 
 let packStringBytes (s: string) = s |> Encoding.UTF8.GetBytes |> ArraySegment<byte>
 
 let extractIncomingMsg (msg: CWebSocketMessage) = 
     match msg with 
     | TextMsg s -> s
-    | BinaryMsg b -> BitConverter.ToString b 
+    | BinaryMsg b -> BitConverter.ToString b
+    | NullMsg () -> ""
 
+let createNewEvts () = 
+    let e = new Event<ConnectionContext>()
+    e, e.Publish
 
-    
-// Home of all of the listener and async message logic
-module ServerAsync = 
-    
-    let initServer () : HttpListener = 
-        let server = new HttpListener()
-        server.Prefixes.Add("http://127.0.0.1:8090/")
-        try server.Start() 
-        with e -> 
-            printfn "Failed to start server -> %s" e.Message
-            Environment.Exit(1)
-        server
+let createEndEvts () = 
+    let e = new Event<ConnectionContext>()
+    e, e.Publish
 
-    // Wait for an incoming HttpContext. When once occurs, create 
-    // a ServerContext and fire an event so an async workflow for handling
-    // messages starts. Drop the request if not a WebSocket request.
-    let triggerNextContext (evt: Event<ServerContext>) (server: HttpListener) _ : unit = 
-        let ctx = server.GetContext()
-        
-        match ctx.Request.IsWebSocketRequest with
-        | true -> 
-            let websocketCtx = ctx.AcceptWebSocketAsync(null) |> Async.AwaitTask |> Async.RunSynchronously
-            evt.Trigger({httpCtx = ctx; websocketCtx = websocketCtx; guid = Guid.NewGuid() })
-        | false -> 
-            ctx.Response.StatusCode <- 400
-            ctx.Response.Close()
-            
-    // Master router for handling various types of incoming WebSocket messages
-    // Takes in event handlers for surfacing new messages to be processed 
-    // upstream, or for tracking when a WebSocketContext has ended and the 
-    // ServerContext needs to be retired from the tracker
-    // Event handlers surface ServerMessageIncoming records
-    let handleIncomingMsg 
-        (incomingMsgEvt: Event<ServerMessageIncoming>) 
-        (endServerCtxEvt: Event<ServerContext>)
-        (serverCtx: ServerContext) 
-        _  = 
-        
-        let websocket = serverCtx.websocketCtx.WebSocket
-        let buf = Array.init 4096 byte |> ArraySegment<byte> // replace this logic with something that understands aggregated messages
-            
-        match websocket.State with    
-        | WebSocketState.Open ->
-            let recvmsg = 
-                try
-                    websocket.ReceiveAsync(buf, CancellationToken.None)
-                    |> Async.AwaitTask
-                    |> Async.RunSynchronously
-                with _ -> new WebSocketReceiveResult(0, WebSocketMessageType.Close, true) // Make dummy message that will close the socket
-            
-            match recvmsg.MessageType with
-            | WebSocketMessageType.Close ->
-                websocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "CLOSED!", CancellationToken.None) 
-                |> Async.AwaitTask 
-                |> Async.Start
-                endServerCtxEvt.Trigger(serverCtx)
-            | WebSocketMessageType.Text -> 
-                let msg = unpackStringBytes buf.Array recvmsg.Count
-                incomingMsgEvt.Trigger({incomingMsgType = WebSocketMessageType.Text; incomingMsg = msg |> TextMsg})
-            | WebSocketMessageType.Binary -> 
-                let binmsg = Array.truncate recvmsg.Count buf.Array
-                incomingMsgEvt.Trigger({incomingMsgType = WebSocketMessageType.Binary; incomingMsg = binmsg |> BinaryMsg})
-            | _ -> 
-                incomingMsgEvt.Trigger({incomingMsgType = WebSocketMessageType.Text; incomingMsg = "Dead path in message type match" |> TextMsg})
-        
-        | _ -> printfn "WebSocket in Closed state?... %A" websocket.State // someday I'll have a real logger
-    
-    
-    // Like the incoming message counterpart. No particular need at this time
-    // to generate events, so it's a little simpler.
-    let handleOutgoingMsg outMsg sctx =
-        let ws = sctx.websocketCtx.WebSocket
-        
-        match outMsg.outgoingMsgType with
-        | WebSocketMessageType.Binary -> 
-            match outMsg.outgoingMsg with
-            | BinaryMsg b ->
-                let arr = b |> ArraySegment<byte>
-                ws.SendAsync(arr, WebSocketMessageType.Binary, true, CancellationToken.None) |> Async.AwaitTask |> ignore
-            | _ -> () // Log this error later, Text message ended up in a Binary outgoingMsg
-        | WebSocketMessageType.Text -> 
-            match outMsg.outgoingMsg with
-            | TextMsg t ->
-                let arr = packStringBytes t
-                ws.SendAsync(arr, WebSocketMessageType.Text, true, CancellationToken.None) |> Async.AwaitTask |> ignore
-            |_ -> () // Log this error later, Binary message ended up in a Text outgoingMsg
-        | WebSocketMessageType.Close -> 
-            ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "CLOSED!", CancellationToken.None) 
-            |> Async.AwaitTask 
-            |> Async.Start
-        | _ -> () // Shut up compiler. How can enums have out of bounds values and still be that enum anyway?
-
-    // Spin infinitely until the WebSocket contained in the ServerContext 
-    // expires/is closed. endServerCtxEvt fires when the connection is closed
-    // so that the HttpContext/WebSocketContext can be removed from the Tracker
-    let takeMessages incomingMsgEvt endServerCtxEvt (sctx: ServerContext) = async {
-        Seq.initInfinite (handleIncomingMsg incomingMsgEvt endServerCtxEvt sctx) 
-        |> Seq.takeWhile (fun _ -> sctx.websocketCtx.WebSocket.State = WebSocketState.Open)
-        |> Seq.iter (fun _ -> ())
-        }
-
-
-  // this workflow consumes a subscription to the ctxEventStream, firing the 
-  // takeMessages spinner once a ServerContext arrives.
-    let beginTakingMessages incomingMsgEvt endServerCtxEvt (sctx: ServerContext) = 
-        sctx 
-        |> takeMessages incomingMsgEvt endServerCtxEvt
-        |> Async.Start
-
- 
-    // Primary spinner: Queues up a new GetContext() sync process, handles the
-    // connection, then resets the listener.
-    let runloop newCtxEvt server = async {
-        Seq.initInfinite (triggerNextContext newCtxEvt server) 
-        |> Seq.iter (fun _ -> ())
-        }
-
- 
-
-
-// Server event generators. We have the Event to pass into functions, and the 
-// actual Observable stream to surface the Events to subscribers
-module ServerEvents =
-    
-    let createServerCtxEvent () = 
-        let serverCtxEvt = new Event<ServerContext>()
-        serverCtxEvt, serverCtxEvt.Publish
-
-
-    let endServerCtxEvent () = 
-        let serverCtxEvt = new Event<ServerContext>()
-        serverCtxEvt, serverCtxEvt.Publish
-    
-
-    let createIncomingMsgEvent () = 
-        let incomingMsgEvt = new Event<ServerMessageIncoming>()
-        incomingMsgEvt, incomingMsgEvt.Publish
-
+let createIncomingMsgEvts () =
+    let e = new Event<CWebSocketMessage>()
+    e, e.Publish
 
 // Barebones state tracking for ServerContexts. Eventually will allow actual
 // sending of messages!
-module HttpContextTracker = 
+module WebSocketContextTracker = 
 
     open System.Collections.Concurrent
 
-    let initCtxTracker () = new ConcurrentDictionary<Guid, ServerContext>()
+    let initCtxTracker () = new ConcurrentDictionary<Guid, ConnectionContext>()
     
-    let insertCtx (cdict: ConcurrentDictionary<Guid, ServerContext>) (ctx: ServerContext) = 
+    let insertCtx (cdict: ConcurrentDictionary<Guid, ConnectionContext>) (ctx: ConnectionContext) = 
         cdict.GetOrAdd (ctx.guid, ctx) |> ignore
         ctx.guid.ToString() |> printfn "Added context with designator %s to the tracker..."
      
      
-    let pollCtxTracker (cdict: ConcurrentDictionary<Guid, ServerContext>) =
+    let pollCtxTracker (cdict: ConcurrentDictionary<Guid, ConnectionContext>) =
         printfn "Tracker contains the following GUIDs:"
         cdict.Keys
         |> Seq.iter (fun g -> g.ToString() |> printfn "%s")
         
 
-    let removeCtx (cdict: ConcurrentDictionary<Guid, ServerContext>) (ctx: ServerContext) =
+    let removeCtx (cdict: ConcurrentDictionary<Guid, ConnectionContext>) (ctx: ConnectionContext) =
         let ret = ctx.guid |> fun g ->  cdict.TryRemove g
         printfn "removed: %b" (fst ret)
+
+
+// Home of all of the listener and async message logic
+module Server = 
+    open WebSocketContextTracker
+
+    // Beginning of the receive pipeline. Mints a record containing what the
+    // next step needs to work. Sends along a dummy record if we hit the 
+    // exception. I don't know if I need to do something with the buffer in
+    // that case or not.
+    let tryReceiveMsg (ws: WebSocket) : ServerMessageIncoming =
+        let buf = Array.init 65536 byte |> ArraySegment<byte>
+        try
+            let res = 
+                ws.ReceiveAsync(buf, CancellationToken.None)
+                |> Async.AwaitTask
+                |> Async.RunSynchronously
+            {receivedMsg = res; buffer = buf}        
+        with _ -> 
+            ws.CloseAsync(WebSocketCloseStatus.Empty, "", CancellationToken.None) 
+            |> Async.AwaitTask
+            |> Async.Start
+            {receivedMsg = WebSocketReceiveResult(0, WebSocketMessageType.Close, true); buffer = buf}
+        
+    
+    // Simple matching based on the message type, and packing of the message
+    let sortAndPackMsg smsg : CWebSocketMessage =
+        match smsg.receivedMsg.MessageType with
+        | WebSocketMessageType.Close -> () |> NullMsg
+        | WebSocketMessageType.Text -> unpackStringBytes smsg.buffer.Array smsg.receivedMsg.Count |> TextMsg
+        | WebSocketMessageType.Binary -> Array.truncate smsg.receivedMsg.Count smsg.buffer.Array |> BinaryMsg
+        | _ -> () |> NullMsg
+
+    
+    // Proc the event that will eventually get hooked into something useful
+    let procMessageEvent (incomingMsgEvt: Event<CWebSocketMessage> ) msg =
+        match msg with
+        | TextMsg m -> incomingMsgEvt.Trigger(m |> TextMsg)
+        | BinaryMsg m -> incomingMsgEvt.Trigger(m |> BinaryMsg)
+        | NullMsg u -> incomingMsgEvt.Trigger(u |> NullMsg)
+        
+    
+    // Assemble the pipe via a binding so I can hook the spinner to it
+    let messagePipe (evt: Event<CWebSocketMessage>) (ws: WebSocket) _ = 
+        tryReceiveMsg ws 
+        |> sortAndPackMsg 
+        |> procMessageEvent evt
+    
+    
+    // Sending Messages is simpler than receiving them! I'm not sure if 
+    // overloading NullMsg for Closed is smart, but it's at least symmetric at
+    // the time of writing.
+    let sendWebSocketMsg outMsg (ws: WebSocket) =
+        match outMsg with
+        | BinaryMsg m ->
+            let arr = m |> ArraySegment<byte>
+            ws.SendAsync(arr, WebSocketMessageType.Binary, true, CancellationToken.None) |> Async.AwaitTask |> ignore
+         | TextMsg m -> 
+            let arr = packStringBytes m
+            ws.SendAsync(arr, WebSocketMessageType.Text, true, CancellationToken.None) |> Async.AwaitTask |> ignore
+        | NullMsg _ -> 
+            ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "CLOSED!", CancellationToken.None) 
+            |> Async.AwaitTask 
+            |> Async.Start
+        
+    
+    // Extracts WebSocket, procs event for context creation, and starts
+    // the message spinner pieline. Procs another event when the context
+    // closes
+    let messageLoop (e: EventBundle) (ws: WebSocket) = async {
+        
+        let sctx = {websocket = ws; guid = Guid.NewGuid()}
+        e.newContextEvt.Trigger(sctx) |> ignore
+        
+        Seq.initInfinite (messagePipe e.incomingMsgEvt ws) 
+        |> Seq.takeWhile (fun _ -> ws.State = WebSocketState.Open )
+        |> Seq.iter (fun _ -> ())
+        
+        e.endContextEvt.Trigger(sctx)|> ignore
+        }
+
+
+    let newCtxEvt, newCtxEvtStream = createNewEvts ()
+    let endCtxEvt, endCtxEvtStream = createEndEvts ()
+    let incomingMsgEvt, incomingMsgEvtStream = createIncomingMsgEvts()
+    let wsctxtracker = initCtxTracker ()
+    
+    newCtxEvtStream |> Observable.subscribe (insertCtx wsctxtracker) |> ignore
+    endCtxEvtStream |> Observable.subscribe (removeCtx wsctxtracker)  |> ignore
+    incomingMsgEvtStream |> Observable.subscribe (fun m -> m |> extractIncomingMsg |> printfn "%s" ) |> ignore
+    
+    let evtbundle = {newContextEvt = newCtxEvt; endContextEvt = endCtxEvt; incomingMsgEvt = incomingMsgEvt}
+    
+    
+    type Startup() = 
+        member this.Configure (app : IApplicationBuilder) = 
+            let wso = new WebSocketOptions()
+            wso.ReceiveBufferSize <- 65536
+            app.UseWebSockets(wso) |> ignore
+            app.Run (fun ctx -> 
+                let ws = ctx.WebSockets.AcceptWebSocketAsync().Result
+                messageLoop evtbundle ws |> Async.StartAsTask :> Task)
+
+
+
+    

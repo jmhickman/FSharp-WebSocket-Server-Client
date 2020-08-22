@@ -1,31 +1,28 @@
 ﻿module Types
 
 open System
-open System.Net
 open System.Net.WebSockets
 
 
 type CWebSocketMessage = 
-    |TextMsg of string
-    |BinaryMsg of byte array
+    | TextMsg of string
+    | BinaryMsg of byte array
+    | NullMsg of unit
 
 
-type ServerContext = {
-    httpCtx : HttpListenerContext 
-    websocketCtx : HttpListenerWebSocketContext
+type ConnectionContext = {
+    websocket : WebSocket
     guid : Guid
     }
 
-type ServerMessageIncoming = {
-    incomingMsgType : WebSocketMessageType
-    incomingMsg : CWebSocketMessage
-   }
 
-type ServerMessageOutgoing = {
-    outgoingMsgType : WebSocketMessageType
-    outgoingMsg : CWebSocketMessage
+type ServerMessageIncoming = {
+    receivedMsg : WebSocketReceiveResult
+    buffer : ArraySegment<byte>
     }
 
-type WebsocketRequest = 
-    |NotWebSocketMessage
-    |ServerCtx of ServerContext
+type EventBundle = {
+    newContextEvt : Event<ConnectionContext>
+    endContextEvt : Event<ConnectionContext>
+    incomingMsgEvt : Event<CWebSocketMessage>
+    }
