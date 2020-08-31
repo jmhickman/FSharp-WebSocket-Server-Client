@@ -10,7 +10,7 @@ open Common.ClientAsync
 let main argv =
     
     // basic setup
-    let connectAttempt = connectClientWebSocket argv.[1] argv.[2]
+    let connectAttempt = connectClientWebSocket argv.[0] argv.[1]
     match connectAttempt.died with
     | true -> 
         printfn "couldn't connect..."

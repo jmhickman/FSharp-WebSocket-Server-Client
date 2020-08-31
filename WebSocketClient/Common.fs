@@ -25,7 +25,7 @@ let extractIncomingMsg (msg: CWebSocketMessage) =
 
 
 let CSendAsync (ws: WebSocket) (arr: ArraySegment<byte>) = 
-    ws.SendAsync (arr, WebSocketMessageType.Binary, true, CancellationToken.None) |> Async.AwaitTask |> ignore
+    ws.SendAsync (arr, WebSocketMessageType.Text, true, CancellationToken.None) |> Async.AwaitTask |> ignore
 
 
 let createIncomingMsgEvent () = 
