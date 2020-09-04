@@ -8,7 +8,15 @@
   <ItemGroup>
     <Compile Include="Types.fs" />
     <Compile Include="Common.fs" />
+    <Compile Include="WebSocketMsgHandlers.fs" />
+    <Compile Include="MailboxOutgoingMessage.fs" />
+    <Compile Include="MailboxContextTracker.fs" />
     <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore" Version="2.2.0" />
+    <PackageReference Include="Microsoft.AspNetCore.WebSockets" Version="2.2.1" />
   </ItemGroup>
 
 </Project>

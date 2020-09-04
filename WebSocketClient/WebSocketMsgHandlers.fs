@@ -81,10 +81,17 @@ let messageLoop
     (sctx: ServiceContext) 
     = async {
     use imbx = MailboxProcessor.Start incomingWsMsgMailboxAgent
-
+    
     Seq.initInfinite (messagePipe imbx sctx.ws) 
     |> Seq.find (fun _ -> sctx.ws.State <> WebSocketState.Open)
     
-    sctx.ws |> closeWebSocket |> Async.Start
-    sctx |> RemoveCtx |> mbx.Post
+    match sctx.ws.State with
+    | WebSocketState.CloseReceived ->
+        printfn "close received"
+        sctx.ws |> closeWebSocket |> Async.Start
+        sctx |> RemoveCtx |> mbx.Post
+    | WebSocketState.Aborted -> 
+        mbx.Post (sctx |> RemoveCtx)
+        mbx.Post ((sctx.host, sctx.port) |> ReconnectCtx)
+    | _ -> printfn "Boom!"
     }

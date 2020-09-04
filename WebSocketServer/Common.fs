@@ -4,7 +4,6 @@ open System.Net.WebSockets
 
 open Types
 
-
 // Small function to clean up ReadKey characters on the console
 let crlf (s: string) = 
     Console.SetCursorPosition((Console.CursorLeft - 1), Console.CursorTop)

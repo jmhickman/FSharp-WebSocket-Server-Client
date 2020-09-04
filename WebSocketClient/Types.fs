@@ -1,38 +1,44 @@
 ﻿module Types
-
 open System
 open System.Net.WebSockets
 
+type ServiceContext = {
+    ws   : WebSocket
+    host : string
+    port : string
+    guid : Guid
+    }
+
+type ContextTrackerMessage = 
+    | AddCtx       of ServiceContext
+    | RemoveCtx    of ServiceContext
+    | ReconnectCtx of string * string
+    | GetCtx       of AsyncReplyChannel<ServiceContext list>
+    | KillAllCtx   of AsyncReplyChannel<int option>
 
 type CWebSocketMessage = 
-    | TextMsg of string
+    | TextMsg   of string
     | BinaryMsg of byte array
-    | NullMsg of unit
+    | NullMsg   of unit
 
+type ServerMessageIncoming = {
+    receivedMsg : WebSocketReceiveResult
+    buffer      : ArraySegment<byte>
+    }
+
+type IncomingMessageLoop = MailboxProcessor<ContextTrackerMessage> -> ServiceContext -> Async<unit>
+
+type ServerMessageOutgoing = {
+    ctx : ServiceContext
+    msg : CWebSocketMessage
+    }
 
 type ConnectionAttempt =
     | ConnectedSocket of ClientWebSocket
     | Dead of unit
 
-
-type ConnectionAttemptResult = {
-    cws : ClientWebSocket
-    died : bool
-    }
-
-type ConnectionContext = {
-    websocket : ClientWebSocket
-    guid : Guid
-    }
-
-
-type ServerMessageIncoming = {
-    receivedMsg : WebSocketReceiveResult
-    buffer : ArraySegment<byte>
-    }
-
-type EventBundle = {
-    newContextEvt : Event<ConnectionContext>
-    endContextEvt : Event<ConnectionContext>
-    incomingMsgEvt : Event<CWebSocketMessage>
-    }
+type AsyncConnectionAttempt = int -> Async<ConnectionAttempt>
+    
+type ConnectionAttemptResult =
+    | Ok
+    | Failed
