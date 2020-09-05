@@ -1,5 +1,5 @@
 ﻿open System
-open Microsoft.AspNetCore.Hosting
+open System.Net.WebSockets
 
 open Types
 open Common
@@ -16,7 +16,13 @@ let main argv =
     
     let cmbx = MailboxProcessor<ContextTrackerMessage>.Start (serviceContextTrackerAgent messageLoop)
     let hostandport = argv.[0], argv.[1]
-    cmbx.Post (hostandport |> ReconnectCtx)
+    cmbx.Post ({host = argv.[0]; port = argv.[1]}|> AddFailoverCtx)
+    
+    match cmbx.PostAndReply ReconnectCtx with
+    | Ok -> ()
+    | Failed -> 
+        printfn "Failed to connect to initial server(s)"
+        Environment.Exit(1)
     
     let smbx = MailboxProcessor.Start outgoingWsMsgMailboxAgent
     
@@ -39,34 +45,35 @@ let main argv =
     let rec controlLoop () =
         match Console.ReadKey().Key with
         | ConsoleKey.Q -> 
-            crlf " "
-            crlf ""
+            crlf ()
             cmbx.PostAndReply GetCtx
             |> List.iter(fun ctx -> 
-                printfn "sending NullMsg to %i" <| ctx.ws.GetHashCode()
                 smbx.Post {ctx = ctx; msg = (() |> NullMsg)})
             cmbx.PostAndReply KillAllCtx |> ignore
             Environment.Exit(0)
         | ConsoleKey.A ->
-            crlf " "
-            crlf ""
+            crlf ()
             printf "ip and port: "
             let raw = Console.ReadLine()
             let rr = raw.Split(' ')
-            cmbx.Post((rr.[0], rr.[1]) |> ReconnectCtx)
+            cmbx.Post ({host = rr.[0]; port = rr.[1]} |> AddFailoverCtx)
+            controlLoop ()
+        | ConsoleKey.L ->
+            crlf ()
+            cmbx.PostAndReply GetCt
+            |> List.iter (printfn "%A")
             controlLoop ()
         | ConsoleKey.S -> 
-            crlf ""
+            crlf ()
             sendMsg ()
             controlLoop ()
         | ConsoleKey.P ->
-            crlf " "
-            crlf ""
+            crlf ()
             cmbx.PostAndReply GetCtx
             |> List.iter (fun ctx -> ctx.guid.ToString() |> printfn "%s")
             controlLoop ()
         | _            -> 
-            crlf " "
+            crlf ()
             controlLoop ()
 
     controlLoop ()

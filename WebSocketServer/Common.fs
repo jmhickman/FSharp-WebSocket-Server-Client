@@ -5,9 +5,11 @@ open System.Net.WebSockets
 open Types
 
 // Small function to clean up ReadKey characters on the console
-let crlf (s: string) = 
-    Console.SetCursorPosition((Console.CursorLeft - 1), Console.CursorTop)
-    Console.Write(s)
+let crlf () = 
+    Console.SetCursorPosition(0, Console.CursorTop)
+    Console.Write(" ")
+    Console.SetCursorPosition(0, Console.CursorTop)
+    Console.Write("")
 
 // This pair gets new incoming contexts into the MailboxProcessor from kestrel
 let createServiceCtx (ws: WebSocket) : ServiceContext =

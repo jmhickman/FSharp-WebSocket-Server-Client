@@ -90,8 +90,10 @@ let messageLoop
         printfn "close received"
         sctx.ws |> closeWebSocket |> Async.Start
         sctx |> RemoveCtx |> mbx.Post
+        mbx.PostAndReply ReconnectCtx |> ignore // Probably shouldn't keep this behavior, unless a 'real' shutdown purges the failover list
     | WebSocketState.Aborted -> 
         mbx.Post (sctx |> RemoveCtx)
-        mbx.Post ((sctx.host, sctx.port) |> ReconnectCtx)
+        mbx.PostAndReply ReconnectCtx |> ignore
+    | WebSocketState.Closed -> ()
     | _ -> printfn "Boom!"
     }

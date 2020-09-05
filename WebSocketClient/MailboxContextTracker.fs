@@ -10,8 +10,8 @@ open Common
 /// MailboxProcessor
 ///
 
-let connectClientWebSocket ip port =    
-    let connectString = sprintf "ws://%s:%s/" ip port |> Uri
+let connectClientWebSocket (c: ConnectionTarget) =    
+    let connectString = sprintf "ws://%s:%s/" c.host c.port |> Uri
              
     let connectAttempt delay = async {
         let cws = new ClientWebSocket()
@@ -32,52 +32,61 @@ let connectWithDelay d (aca: AsyncConnectionAttempt) =
      | Dead _ -> ()
     ]
 
-let cycleConnectionAttempts ip port d = connectClientWebSocket ip port |> connectWithDelay d 
+let cycleConnectionAttempts (c: ConnectionTarget) d = connectClientWebSocket c |> connectWithDelay d 
 
 
-let tryWebSocketConnection (mbox: MailboxProcessor<ContextTrackerMessage>) ip port =    
+let tryWebSocketConnection (mbox: MailboxProcessor<ContextTrackerMessage>) (c: ConnectionTarget) =    
     
     let rec conn delay attempt =    
-        match cycleConnectionAttempts ip port delay with
-        | [] -> if attempt < 4 then 
-                    conn ((delay + 1) * 2) (attempt + 1)
-                else Failed
+        match cycleConnectionAttempts c delay with
+        | [] -> 
+            if attempt < 4 then 
+                conn ((delay + 1) * 2) (attempt + 1)
+            else Failed
         | x -> 
-            createServiceCtx ip port (x.Head)
+            createServiceCtx c.host c.port (x.Head)
             |> postServiceCtxMsg mbox
             |> Async.Start
             Ok
     conn 0 1
 
+let matchWebSocketConnection mbx c =
+    match tryWebSocketConnection mbx c with
+    | Ok -> true
+    | Failed -> false
 
-// Mostly a bunch of partial applications that set up this scope, and then a 
-// relatively simple set of handlers for each type of Msg the processor cares
-// about. 
 let serviceContextTrackerAgent 
     (msgLoop: IncomingMessageLoop) 
     (mbx: MailboxProcessor<ContextTrackerMessage>) 
     =
     let serviceContextList = []
+    let targethosts = []
     
-    let rec postLoop (sCTL: ServiceContext list) = async {
+    let rec postLoop (ts: ConnectionTarget list, sctxs: ServiceContext list)  = async {
         let! msg = mbx.Receive()
         
         match msg with
         | AddCtx ctx ->
             msgLoop mbx ctx |> Async.Start
-            return! ctx::sCTL |> postLoop
+            return! (ts, ctx::sctxs) |> postLoop
+        | AddFailoverCtx ctx -> return! (ctx :: ts, sctxs) |> postLoop
         | RemoveCtx ctx ->
-            return! sCTL |> List.filter (fun sctx -> ctx.guid <> sctx.guid) |> postLoop
-        | ReconnectCtx (ip, port) -> 
-            let res = tryWebSocketConnection mbx ip port
-            if res = Failed then Environment.Exit(1)
-            else return! postLoop sCTL 
+            let f = sctxs |> List.filter (fun sctx -> ctx.guid <> sctx.guid) 
+            return! (ts, f) |> postLoop
+        | ReconnectCtx r -> 
+            match (ts |> List.tryFind (matchWebSocketConnection mbx)) with
+            | Some c -> r.Reply Ok
+            | None -> r.Reply Failed
+            return! postLoop (ts, sctxs)
+        | GetCt r -> 
+            r.Reply ts
+            return! postLoop (ts, sctxs)
         | GetCtx r ->
-            r.Reply sCTL
-            return! postLoop sCTL
+            r.Reply sctxs
+            return! postLoop (ts, sctxs)
         | KillAllCtx r -> 
             r.Reply (0 |> Some)
-            return! postLoop []
+            return! postLoop (ts, [])
         } 
         
-    postLoop serviceContextList
+    postLoop (targethosts, serviceContextList)

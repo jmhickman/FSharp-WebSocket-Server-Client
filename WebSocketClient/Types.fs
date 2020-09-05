@@ -2,6 +2,11 @@
 open System
 open System.Net.WebSockets
 
+type ConnectionTarget = {
+    host : string
+    port : string
+    }
+
 type ServiceContext = {
     ws   : WebSocket
     host : string
@@ -9,10 +14,16 @@ type ServiceContext = {
     guid : Guid
     }
 
+type ConnectionAttemptResult =
+    | Ok
+    | Failed
+
 type ContextTrackerMessage = 
     | AddCtx       of ServiceContext
+    | AddFailoverCtx of ConnectionTarget
     | RemoveCtx    of ServiceContext
-    | ReconnectCtx of string * string
+    | ReconnectCtx of AsyncReplyChannel<ConnectionAttemptResult>
+    | GetCt        of AsyncReplyChannel<ConnectionTarget list>
     | GetCtx       of AsyncReplyChannel<ServiceContext list>
     | KillAllCtx   of AsyncReplyChannel<int option>
 
@@ -39,6 +50,3 @@ type ConnectionAttempt =
 
 type AsyncConnectionAttempt = int -> Async<ConnectionAttempt>
     
-type ConnectionAttemptResult =
-    | Ok
-    | Failed

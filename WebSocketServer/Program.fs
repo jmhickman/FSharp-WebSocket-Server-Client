@@ -48,8 +48,7 @@ let main argv =
     let rec controlLoop () =
         match Console.ReadKey().Key with
         | ConsoleKey.Q -> 
-            crlf " "
-            crlf ""
+            crlf ()
             imbx.PostAndReply GetCtx
             |> List.iter(fun ctx -> 
                 printfn "sending NullMsg to %i" <| ctx.ws.GetHashCode()
@@ -57,17 +56,16 @@ let main argv =
             imbx.PostAndReply KillAllCtx |> ignore
             Environment.Exit(0)
         | ConsoleKey.S -> 
-            crlf ""
+            crlf ()
             sendMsg ()
             controlLoop ()
         | ConsoleKey.P ->
-            crlf " "
-            crlf ""
+            crlf ()
             imbx.PostAndReply GetCtx
             |> List.iter (fun ctx -> ctx.guid.ToString() |> printfn "%s")
             controlLoop ()
         | _            -> 
-            crlf " "
+            crlf ()
             controlLoop ()
 
     controlLoop ()
