@@ -9,8 +9,6 @@ type ConnectionTarget = {
 
 type ServiceContext = {
     ws   : WebSocket
-    host : string
-    port : string
     guid : Guid
     }
 
@@ -43,10 +41,10 @@ type ServerMessageOutgoing = {
     ctx : ServiceContext
     msg : CWebSocketMessage
     }
-
+(*
 type ConnectionAttempt =
     | ConnectedSocket of ClientWebSocket
-    | Dead of unit
+    | Dead of unit*)
 
-type AsyncConnectionAttempt = int -> Async<ConnectionAttempt>
+type AsyncConnectionAttempt = int -> Async<ConnectionAttemptResult>
     

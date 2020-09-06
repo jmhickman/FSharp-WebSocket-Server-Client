@@ -19,7 +19,7 @@ let main argv =
     cmbx.Post ({host = argv.[0]; port = argv.[1]}|> AddFailoverCtx)
     
     match cmbx.PostAndReply ReconnectCtx with
-    | Ok -> ()
+    | Ok _ -> ()
     | Failed -> 
         printfn "Failed to connect to initial server(s)"
         Environment.Exit(1)
@@ -66,6 +66,10 @@ let main argv =
         | ConsoleKey.S -> 
             crlf ()
             sendMsg ()
+            controlLoop ()
+        | ConsoleKey.R ->
+            printfn "attempting to connect by prompt"
+            cmbx.PostAndReply ReconnectCtx |> ignore
             controlLoop ()
         | ConsoleKey.P ->
             crlf ()

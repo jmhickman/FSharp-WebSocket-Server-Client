@@ -6,54 +6,30 @@ open System.Threading
 open Types
 open Common
 
-///
-/// MailboxProcessor
-///
 
-let connectClientWebSocket (c: ConnectionTarget) =    
+let connectClientWebSocket (c: ConnectionTarget, delay: int) =    
     let connectString = sprintf "ws://%s:%s/" c.host c.port |> Uri
              
     let connectAttempt delay = async {
         let cws = new ClientWebSocket()
-        do! Async.Sleep (delay * 2500)
+        printfn "%i" delay
+        do! Async.Sleep delay
         printfn "Connecting..."
         try
             do! cws.ConnectAsync(connectString, CancellationToken.None) |> Async.AwaitTask
-            return cws |> ConnectedSocket
+            return cws |> Some
         with _ -> 
-            return cws.Dispose() |> Dead
+            cws.Dispose() 
+            return None
         }
-    connectAttempt
-
-let connectWithDelay d (aca: AsyncConnectionAttempt) =  
-    [
-     match (aca d |> Async.RunSynchronously) with
-     | ConnectedSocket s -> yield s
-     | Dead _ -> ()
-    ]
-
-let cycleConnectionAttempts (c: ConnectionTarget) d = connectClientWebSocket c |> connectWithDelay d 
+    connectAttempt delay
 
 
-let tryWebSocketConnection (mbox: MailboxProcessor<ContextTrackerMessage>) (c: ConnectionTarget) =    
-    
-    let rec conn delay attempt =    
-        match cycleConnectionAttempts c delay with
-        | [] -> 
-            if attempt < 4 then 
-                conn ((delay + 1) * 2) (attempt + 1)
-            else Failed
-        | x -> 
-            createServiceCtx c.host c.port (x.Head)
-            |> postServiceCtxMsg mbox
-            |> Async.Start
-            Ok
-    conn 0 1
+let generateTargetsAndDelays attempts delay (cts: ConnectionTarget list) =
+    cts 
+    |> List.map(fun c -> [for idx in [1..attempts] do yield (c, (idx * delay)) ])
+    |> List.concat
 
-let matchWebSocketConnection mbx c =
-    match tryWebSocketConnection mbx c with
-    | Ok -> true
-    | Failed -> false
 
 let serviceContextTrackerAgent 
     (msgLoop: IncomingMessageLoop) 
@@ -61,6 +37,7 @@ let serviceContextTrackerAgent
     =
     let serviceContextList = []
     let targethosts = []
+    let pGenerate = generateTargetsAndDelays 4 500 
     
     let rec postLoop (ts: ConnectionTarget list, sctxs: ServiceContext list)  = async {
         let! msg = mbx.Receive()
@@ -74,8 +51,15 @@ let serviceContextTrackerAgent
             let f = sctxs |> List.filter (fun sctx -> ctx.guid <> sctx.guid) 
             return! (ts, f) |> postLoop
         | ReconnectCtx r -> 
-            match (ts |> List.tryFind (matchWebSocketConnection mbx)) with
-            | Some c -> r.Reply Ok
+            let res = 
+                ts 
+                |> pGenerate
+                |> List.tryPick(fun x -> (connectClientWebSocket x |> Async.RunSynchronously))
+                
+            match res with
+            | Some c -> 
+                createServiceCtx c |> (postServiceCtxMsg mbx) |> Async.Start
+                r.Reply  Ok
             | None -> r.Reply Failed
             return! postLoop (ts, sctxs)
         | GetCt r -> 

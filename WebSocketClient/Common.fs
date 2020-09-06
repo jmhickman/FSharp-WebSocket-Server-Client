@@ -12,10 +12,9 @@ let crlf () =
     Console.Write("")
     
 
-// This pair gets new incoming contexts into the MailboxProcessor from kestrel
-let createServiceCtx host port (ws: WebSocket) : ServiceContext =
+let createServiceCtx (ws: WebSocket) : ServiceContext =
     let g = Guid.NewGuid()
-    {ws = ws; host = host; port = port; guid = g}
+    {ws = ws; guid = g}
 
 
 let postServiceCtxMsg 
