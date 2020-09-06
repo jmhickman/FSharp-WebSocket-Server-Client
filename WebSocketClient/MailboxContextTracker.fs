@@ -7,14 +7,16 @@ open Types
 open Common
 
 
-let connectClientWebSocket (c: ConnectionTarget, delay: int) =    
-    let connectString = sprintf "ws://%s:%s/" c.host c.port |> Uri
+// This function attempts to activate a new WebSocket with the indicated Server
+// Cleans up the ClientWebSocket if the attempt creates an exception. Designed
+// to require a delay to facilitate repeated attempts. Implemented in a try
+// because this is actually more straightforward than setting up a Task timer.
+let connectClientWebSocket (ct, delay) : Async<ClientWebSocket option> =    
+    let connectString = sprintf "ws://%s:%s/" ct.host ct.port |> Uri
              
     let connectAttempt delay = async {
         let cws = new ClientWebSocket()
-        printfn "%i" delay
         do! Async.Sleep delay
-        printfn "Connecting..."
         try
             do! cws.ConnectAsync(connectString, CancellationToken.None) |> Async.AwaitTask
             return cws |> Some
@@ -25,19 +27,38 @@ let connectClientWebSocket (c: ConnectionTarget, delay: int) =
     connectAttempt delay
 
 
-let generateTargetsAndDelays attempts delay (cts: ConnectionTarget list) =
-    cts 
+// This function creates a list of Server and delay pairs, which are fed 
+// singlely to the connection attempt function. The notion of the number of 
+// attempts for a given Server is encoded in the number of times the Server's
+// entries appear in the list.
+let generateTargetsWithDelays attempts delay connectionTargets =
+    connectionTargets 
     |> List.map(fun c -> [for idx in [1..attempts] do yield (c, (idx * delay)) ])
     |> List.concat
 
 
+// This function is a simple alias fully applying a default delay and number of
+// connection attempts. Designed to stop the first time we get a Some so that
+// repeated connections after the first successful one are prohibited.
+let tryWebSocketConnection connectionTargets =
+    connectionTargets 
+    |> generateTargetsWithDelays 4 500
+    |> List.tryPick(fun ct -> (connectClientWebSocket ct |> Async.RunSynchronously))
+
+
+// A MailboxProcessor that contains and controls the shared state of the 
+// WebSocket connections, called ServiceContexts. It tracks both active 
+// ServiceContexts and the list of Servers that are contacted when a 
+// connection dies or when manually prompted. ServiceContexts may be added,
+// removed, or dropped. A list of active ServiceContexts will be returned on
+// request. The incoming message handler is asynchronously started when a new
+// WebSocket connection is successfully established.
 let serviceContextTrackerAgent 
     (msgLoop: IncomingMessageLoop) 
     (mbx: MailboxProcessor<ContextTrackerMessage>) 
     =
     let serviceContextList = []
     let targethosts = []
-    let pGenerate = generateTargetsAndDelays 4 500 
     
     let rec postLoop (ts: ConnectionTarget list, sctxs: ServiceContext list)  = async {
         let! msg = mbx.Receive()
@@ -47,30 +68,24 @@ let serviceContextTrackerAgent
             msgLoop mbx ctx |> Async.Start
             return! (ts, ctx::sctxs) |> postLoop
         | AddFailoverCtx ctx -> return! (ctx :: ts, sctxs) |> postLoop
-        | RemoveCtx ctx ->
-            let f = sctxs |> List.filter (fun sctx -> ctx.guid <> sctx.guid) 
-            return! (ts, f) |> postLoop
-        | ReconnectCtx r -> 
-            let res = 
-                ts 
-                |> pGenerate
-                |> List.tryPick(fun x -> (connectClientWebSocket x |> Async.RunSynchronously))
-                
-            match res with
-            | Some c -> 
-                createServiceCtx c |> (postServiceCtxMsg mbx) |> Async.Start
-                r.Reply  Ok
-            | None -> r.Reply Failed
-            return! postLoop (ts, sctxs)
         | GetCt r -> 
             r.Reply ts
             return! postLoop (ts, sctxs)
         | GetCtx r ->
             r.Reply sctxs
             return! postLoop (ts, sctxs)
-        | KillAllCtx r -> 
-            r.Reply (0 |> Some)
+        | KillAllCtx -> 
             return! postLoop (ts, [])
+        | RemoveCtx ctx ->
+            let f = sctxs |> List.filter (fun sctx -> ctx.guid <> sctx.guid) 
+            return! (ts, f) |> postLoop
+        | ReconnectCtx r -> 
+            match tryWebSocketConnection ts with
+            | Some c -> 
+                createServiceCtx c |> (postServiceCtxMsg mbx) |> Async.Start
+                r.Reply  Ok
+            | None -> r.Reply Failed
+            return! postLoop (ts, sctxs)
         } 
         
     postLoop (targethosts, serviceContextList)

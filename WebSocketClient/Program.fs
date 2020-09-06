@@ -6,7 +6,8 @@ open Common
 open WebSocketMsgHandlers
 open MailboxOutgoingMessage
 open MailboxContextTracker
-//open Client
+
+// this stuff is mostly a testing mess, and doesn't reflect anything about the final application. It's all harness and no order.
 
 [<EntryPoint>]
 let main argv =
@@ -16,7 +17,7 @@ let main argv =
     
     let cmbx = MailboxProcessor<ContextTrackerMessage>.Start (serviceContextTrackerAgent messageLoop)
     let hostandport = argv.[0], argv.[1]
-    cmbx.Post ({host = argv.[0]; port = argv.[1]}|> AddFailoverCtx)
+    cmbx.Post ({host = argv.[0]; port = argv.[1]}|> AddFailoverCt)
     
     match cmbx.PostAndReply ReconnectCtx with
     | Ok _ -> ()
@@ -24,8 +25,10 @@ let main argv =
         printfn "Failed to connect to initial server(s)"
         Environment.Exit(1)
     
-    let smbx = MailboxProcessor.Start outgoingWsMsgMailboxAgent
+    let smbx = MailboxProcessor.Start outgoingWsMsgMailbox // since there's only one send-side Mailbox, this will probably be created in the Transceiver.
     
+    
+    // Standin for the primary Transceiver send interface
     let sendMsg () =
         let currCtxs = cmbx.PostAndReply GetCtx
         if currCtxs.Length = 0 then printfn "No connections!"
@@ -39,8 +42,6 @@ let main argv =
             smbx.Post {ctx = dctx; msg = (msg |> TextMsg)}
 
 
-    // initial client connect attempt start goes here    
-
     // Basic control loop to interact with the server for testing
     let rec controlLoop () =
         match Console.ReadKey().Key with
@@ -49,14 +50,14 @@ let main argv =
             cmbx.PostAndReply GetCtx
             |> List.iter(fun ctx -> 
                 smbx.Post {ctx = ctx; msg = (() |> NullMsg)})
-            cmbx.PostAndReply KillAllCtx |> ignore
+            cmbx.Post KillAllCtx
             Environment.Exit(0)
         | ConsoleKey.A ->
             crlf ()
             printf "ip and port: "
             let raw = Console.ReadLine()
             let rr = raw.Split(' ')
-            cmbx.Post ({host = rr.[0]; port = rr.[1]} |> AddFailoverCtx)
+            cmbx.Post ({host = rr.[0]; port = rr.[1]} |> AddFailoverCt)
             controlLoop ()
         | ConsoleKey.L ->
             crlf ()
