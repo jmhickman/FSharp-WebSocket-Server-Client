@@ -20,6 +20,11 @@ The purpose of this project was to learn and create a WebSocket server and clien
 
 The project contains two Dotnet Core 3.1 console applications. One is a WebSocket server using Asp.net Core's Kestrel server, and the other is a client designed to establish a link with one or more WebSocket servers.
 
+### Running
+
+Server - Compile and run like `WebsockerServer 127.0.0.1 5000` or an IP on your host. The normal Asp.net Core output will appear, but Ctrl-C will not kill the entire application. Please see 'Q' below.  
+Client - Compile and run like `WebsocketClient 127.0.0.1 5000` or the IP of the server. There is no output on successful connection, or on unsuccessful reconnection attempts, but if the initial connection attempt fails, it will say so and exit.
+
 ### Basic interface
 
 Both applications have a similar console interface that is only good for testing. They are unapologetically low-function and contain almost no error handling! Certain keypresses have behavior associated with them:  
