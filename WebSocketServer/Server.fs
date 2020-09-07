@@ -9,13 +9,16 @@ open WebSocketMsgHandlers
 open MailboxContextTracker
 
 
-// This is so stupid, but I have to hold the middleware open for websockets
-// and I don't know of a more clever way to do it...
+// This function is designed to nothing, with as relatively low an impact as
+// possible. It only exists because the Asp.Net Core middleware will 
+// automatically close any websocket as soon as the Async/Task completes.
+// This this just does nothing until the WebSocket is closed elsewere in the
+// stack. It's stupid as hell, but then the requirement is stupid as hell too.
 let rec infiniSpin (ws: WebSocket) = async {
     do! Async.Sleep 2500
     if ws.State = WebSocketState.Open then
         do! infiniSpin ws
-    else ws.GetHashCode() |> printfn "Socket %i closed" 
+    else ()
     }
 
 
@@ -23,9 +26,7 @@ let mbox = MailboxProcessor<ContextTrackerMessage>.Start (serviceContextTrackerA
 
 let returnMbox () = mbox
 
-// Ugh
-// I have no use for middleware at the moment, hence the use of `Run` and
-// nothing else
+// Gross OP that's required to run the Asp.net Core Kestrel server.
 type Startup() = 
     member this.Configure (app : IApplicationBuilder) = 
         app.UseWebSockets() |> ignore

@@ -6,11 +6,16 @@ open System.Threading
 
 open Types
 
-
+// This function is just a convenience symbol for the repetitive task of 
+// extracting a string from an incoming byte array. Might be removed eventually
+// when TextMsg is removed from the WebSocket comms layer.
 let unpackStringBytes bytearr count = Encoding.UTF8.GetString (bytearr, 0, count)
 
+// The reverse of the above, also may be removed.
 let packStringBytes (s: string) = s |> Encoding.UTF8.GetBytes |> ArraySegment<byte>
 
+// This function handles the incoming message types. Will eventually be sub-
+// sumed into the higher Transceiver layer where deserialization will occur.
 let extractIncomingMsg (msg: CWebSocketMessage) = 
     match msg with 
     | TextMsg s   -> s
@@ -18,12 +23,16 @@ let extractIncomingMsg (msg: CWebSocketMessage) =
     | NullMsg ()  -> ""
 
 
+// This function is a convenience symbol for closing WebSockets asynchronously.
 let closeWebSocket (ws: WebSocket) = async {
     do! ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None) 
         |> Async.AwaitTask
     }
 
 
+// This MailboxProcessor handles incoming WebSocket protocol messages. For
+// now it just dumps things to the terminal. Eventually will expose messages
+// to the Transceiver above it.
 let incomingWsMsgMailboxAgent (mbox: MailboxProcessor<CWebSocketMessage>) = 
     let rec messageLoop () = async {
         let! msg = mbox.Receive()
@@ -33,27 +42,22 @@ let incomingWsMsgMailboxAgent (mbox: MailboxProcessor<CWebSocketMessage>) =
     messageLoop ()
 
 
-// Beginning of the receive pipeline. Sends along a dummy record if we 
-// hit the exception. I don't know if I need to do something with the 
-// buffer in that case or not. When a logger gets plugged in I won't just
-// drop the exception into the void anymore.
-// While an exception causing a closure of the pipe might feel dramatic, 
-// I want this to fail quickly and have the client reconnect rather than
-// try to figure out why the receive failed.
-let tryReceiveMsg (ws: WebSocket) : ServerMessageIncoming =
+// This function is the IO bondary between the underlaying OS WebSocket impl
+// and the application. At this stage, I'm not concerned about exceptions in
+// the underlying task or anything, so there's no try/with here.
+let receiveMsg (ws: WebSocket) : ServerMessageIncoming =
     let buf = Array.init 65536 byte |> ArraySegment<byte>
-    try
-        let res = 
-            ws.ReceiveAsync(buf, CancellationToken.None)
-            |> Async.AwaitTask
-            |> Async.RunSynchronously
-        {receivedMsg = res; buffer = buf}        
-    with _ -> 
-        closeWebSocket ws |> Async.Start
-        {receivedMsg = WebSocketReceiveResult(0, WebSocketMessageType.Close, true); buffer = buf}
+    let res = 
+        ws.ReceiveAsync(buf, CancellationToken.None)
+        |> Async.AwaitTask
+        |> Async.RunSynchronously
+    {receivedMsg = res; buffer = buf}
     
 
-// Simple matching based on the message type, and packing of the message
+// This function handles the incoming messages based on type, creating a
+// corresponding CWebSocketMessage with the original contents. The TextMsg
+// path will eventually be culled. The fallthrough branch might be better 
+// leveraged eventually.
 let sortAndPackMsg smsg : CWebSocketMessage =
     match smsg.receivedMsg.MessageType with
     | WebSocketMessageType.Close  -> () |> NullMsg
@@ -66,23 +70,21 @@ let sortAndPackMsg smsg : CWebSocketMessage =
     | _ -> () |> NullMsg
 
 
-// Message receive pipeline
-let messagePipe (imbx: MailboxProcessor<CWebSocketMessage>) (ws: WebSocket) _ = 
-    tryReceiveMsg ws 
-    |> sortAndPackMsg 
-    |> imbx.Post
-
-// the MailboxProcessor has to be passed in here rather than calling the 
-// convenient return method that some other code gets to use because this 
-// file is lower in the stack. Spins receiving messages until the socket
-// connection closes.
+// This function is the asynchronous core of the message receive logic. It 
+// sets up a spinner that monitors for incoming WebSocket protocol messages and
+// controls what occurs when the WebSocket is closed or collapses. Is called
+// from and communicates with the MailboxProcessor ServiceContext tracker, 
+// while also starting a incoming MailboxProcessor. Each of these is unique 
+// to a ServiceContext, making each WebSocket protocol connection its own 
+// thread. Less complex than the Client equivalent, since the server doesn't
+// attempt to re-establish connections with clients.
 let messageLoop 
     (mbx: MailboxProcessor<ContextTrackerMessage>) 
     (sctx: ServiceContext) 
     = async {
     use imbx = MailboxProcessor.Start incomingWsMsgMailboxAgent
 
-    Seq.initInfinite (messagePipe imbx sctx.ws) 
+    Seq.initInfinite (fun _ -> receiveMsg sctx.ws |> sortAndPackMsg |> imbx.Post) 
     |> Seq.find (fun _ -> sctx.ws.State <> WebSocketState.Open)
     
     sctx.ws |> closeWebSocket |> Async.Start

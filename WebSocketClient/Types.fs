@@ -45,6 +45,10 @@ type ServerMessageIncoming = {
     buffer      : ArraySegment<byte>
     }
 
+// Shamelessly here just to make the function signature of the context tracker 
+// less terrible.
+type CtxMailboxProcessor = MailboxProcessor<ContextTrackerMessage>
+
 // Describes a function interface capable of handling incoming messages. Mostly
 // for convenience.
 type IncomingMessageLoop = MailboxProcessor<ContextTrackerMessage> -> ServiceContext -> Async<unit>

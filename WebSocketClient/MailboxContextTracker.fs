@@ -53,21 +53,18 @@ let tryWebSocketConnection connectionTargets =
 // removed, or dropped. A list of active ServiceContexts will be returned on
 // request. The incoming message handler is asynchronously started when a new
 // WebSocket connection is successfully established.
-let serviceContextTrackerAgent 
-    (msgLoop: IncomingMessageLoop) 
-    (mbx: MailboxProcessor<ContextTrackerMessage>) 
-    =
+let serviceContextTrackerAgent msgLoop (mbx: CtxMailboxProcessor) =
     let serviceContextList = []
     let targethosts = []
     
-    let rec postLoop (ts: ConnectionTarget list, sctxs: ServiceContext list)  = async {
+    let rec postLoop (ts: ConnectionTarget list, sctxs: ServiceContext list) = async {
         let! msg = mbx.Receive()
         
         match msg with
         | AddCtx ctx ->
             msgLoop mbx ctx |> Async.Start
             return! (ts, ctx::sctxs) |> postLoop
-        | AddFailoverCtx ctx -> return! (ctx :: ts, sctxs) |> postLoop
+        | AddFailoverCt ctx -> return! (ctx :: ts, sctxs) |> postLoop
         | GetCt r -> 
             r.Reply ts
             return! postLoop (ts, sctxs)

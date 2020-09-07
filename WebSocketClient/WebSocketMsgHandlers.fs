@@ -71,29 +71,20 @@ let sortAndPackMsg smsg : CWebSocketMessage =
     | _ -> () |> NullMsg
 
 
-// This function is a convenience symbol for the spinner contained in 
-// messageLoop to apply the infinite sequence. Pushes the packed message
-// to the MailboxProcesser.
-let messagePipe (imbx: MailboxProcessor<CWebSocketMessage>) (ws: WebSocket) _ = 
-    receiveMsg ws 
-    |> sortAndPackMsg 
-    |> imbx.Post
-
-
 // This function is the asynchronous core of the message receive logic. It 
 // sets up a spinner that monitors for incoming WebSocket protocol messages and
 // controls what occurs when the WebSocket is closed or collapses. Is called
 // from and communicates with the MailboxProcessor ServiceContext tracker, 
-// while also starting a incoming MailboxProcessor. The messageLoop is unique
+// while also starting a incoming MailboxProcessor. Each of these is unique
 // to a ServiceContext, making each WebSocket protocol connection its own 
 // thread.
 let messageLoop 
     (mbx: MailboxProcessor<ContextTrackerMessage>) 
     (sctx: ServiceContext) 
     = async {
-    use imbx = MailboxProcessor.Start incomingWsMsgMailbox
+    use imbx = MailboxProcessor.Start incomingWsMsgMailbox //the uplift for the Transceiver will need to be passed in here
     
-    Seq.initInfinite (messagePipe imbx sctx.ws) 
+    Seq.initInfinite (fun _ -> receiveMsg sctx.ws |> sortAndPackMsg |> imbx.Post) 
     |> Seq.find (fun _ -> sctx.ws.State <> WebSocketState.Open)
     
     match sctx.ws.State with

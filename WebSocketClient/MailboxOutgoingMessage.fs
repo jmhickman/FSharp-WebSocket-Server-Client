@@ -8,7 +8,7 @@ open WebSocketMsgHandlers
 
 // This function is a convenience symbol for sending a WebSocket message.
 // It is hardcoded to use the Binary message type because the application layer
-// protocol is entirely binary in nature. Deliberately not completely 
+// protocol is entirely binary in nature. Deliberately not completely async.
 let CSendAsync (ws: WebSocket) (arr: ArraySegment<byte>) = 
     ws.SendAsync (arr, WebSocketMessageType.Binary, true, CancellationToken.None) |> Async.AwaitTask |> ignore
 

@@ -11,12 +11,14 @@ let crlf () =
     Console.SetCursorPosition(0, Console.CursorTop)
     Console.Write("")
 
-// This pair gets new incoming contexts into the MailboxProcessor from kestrel
+// This function is a convenience symbol for creating a ServiceContext to send
+// to a MailboxProcessor Context Tracker.
 let createServiceCtx (ws: WebSocket) : ServiceContext =
     let g = Guid.NewGuid()
     {ws = ws; guid = g}
 
-
+// This function is a concenience symbol for packing and sending the AddCtx
+// message to a MailboxProcessor Context Tracker.
 let postServiceCtxMsg 
     (mbox: MailboxProcessor<ContextTrackerMessage>) 
     (ctx: ServiceContext) 

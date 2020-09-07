@@ -6,6 +6,8 @@ open Common
 open MailboxOutgoingMessage
 open Server
 
+// this stuff is mostly a testing mess, and doesn't reflect anything about the final application. It's all harness and no order.
+
 [<EntryPoint>]
 let main argv =
     if argv.Length <> 2 then 
@@ -16,7 +18,8 @@ let main argv =
     let imbx = returnMbox ()
     let smbx = MailboxProcessor.Start outgoingWsMsgMailboxAgent
 
-
+    
+    // Standin for the primary Transceiver send interface
     let sendMsg () =
         let currCtxs = imbx.PostAndReply GetCtx
         if currCtxs.Length = 0 then printfn "No clients!"
