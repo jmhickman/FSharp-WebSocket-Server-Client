@@ -39,9 +39,15 @@ let main argv =
         WebHostBuilder()
         |> fun x -> x.UseKestrel()
         |> fun x -> x.UseUrls(uri)
+        
         |> fun x -> x.UseStartup<Startup>()
+        |> fun x -> x.CaptureStartupErrors(false)
         |> fun x -> x.Build()
-        |> fun x -> x.Run()
+        |> fun x -> 
+            try x.Run() 
+            with _ -> 
+                printfn "Server Failed to start! Check port and address for collision/binding conflicts"
+                Environment.Exit(1)
         }
 
 

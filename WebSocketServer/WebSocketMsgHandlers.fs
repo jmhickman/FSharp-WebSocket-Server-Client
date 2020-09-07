@@ -74,7 +74,7 @@ let sortAndPackMsg smsg : CWebSocketMessage =
 // sets up a spinner that monitors for incoming WebSocket protocol messages and
 // controls what occurs when the WebSocket is closed or collapses. Is called
 // from and communicates with the MailboxProcessor ServiceContext tracker, 
-// while also starting a incoming MailboxProcessor. Each of these is unique 
+// while also starting an incoming MailboxProcessor. Each of these is unique 
 // to a ServiceContext, making each WebSocket protocol connection its own 
 // thread. Less complex than the Client equivalent, since the server doesn't
 // attempt to re-establish connections with clients.
