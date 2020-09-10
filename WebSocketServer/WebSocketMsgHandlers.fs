@@ -86,7 +86,7 @@ let messageLoop
 
     Seq.initInfinite (fun _ -> receiveMsg sctx.ws |> sortAndPackMsg |> imbx.Post) 
     |> Seq.find (fun _ -> sctx.ws.State <> WebSocketState.Open)
-    
+    printfn "closing socket..."
     sctx.ws |> closeWebSocket |> Async.Start
     sctx |> RemoveCtx |> mbx.Post
     }

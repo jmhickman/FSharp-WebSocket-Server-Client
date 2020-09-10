@@ -26,8 +26,7 @@ let extractIncomingMsg (msg: CWebSocketMessage) =
 
 // This function is a convenience symbol for closing WebSockets asynchronously.
 let closeWebSocket (ws: WebSocket) = async {
-    do! ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None) 
-        |> Async.AwaitTask
+    do! ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None) |> Async.AwaitTask
     }
 
 

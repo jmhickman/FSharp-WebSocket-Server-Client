@@ -32,6 +32,7 @@ type Startup() =
         app.UseWebSockets() |> ignore
         app.Run (fun ctx -> 
             let ws = ctx.WebSockets.AcceptWebSocketAsync().Result
+            printfn "Connection incoming..."
             ws
             |> createServiceCtx 
             |> postServiceCtxMsg mbox 

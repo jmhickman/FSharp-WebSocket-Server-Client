@@ -27,7 +27,7 @@ let sendWebSocketMsg outMsg (ws: WebSocket) =
         CSendAsync ws arr
     | NullMsg _ -> 
         closeWebSocket ws |> Async.Start
-        ws.Dispose()
+        //ws.Dispose()
 
 
 // This MailboxProcessor handles the outgoing message queue, using the 

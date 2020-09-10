@@ -17,6 +17,7 @@ let connectClientWebSocket (ct, delay) : Async<ClientWebSocket option> =
     let connectAttempt delay = async {
         let cws = new ClientWebSocket()
         do! Async.Sleep delay
+        printfn "Connecting..."
         try
             do! cws.ConnectAsync(connectString, CancellationToken.None) |> Async.AwaitTask
             return cws |> Some
@@ -80,8 +81,11 @@ let serviceContextTrackerAgent msgLoop (mbx: CtxMailboxProcessor) =
             match tryWebSocketConnection ts with
             | Some c -> 
                 createServiceCtx c |> (postServiceCtxMsg mbx) |> Async.Start
+                printfn "Connected"
                 r.Reply  Ok
-            | None -> r.Reply Failed
+            | None -> 
+                printfn "Connection failed"
+                r.Reply Failed
             return! postLoop (ts, sctxs)
         } 
         

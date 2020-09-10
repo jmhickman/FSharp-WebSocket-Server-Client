@@ -1,5 +1,5 @@
 ﻿open System
-open System.Net.WebSockets
+open System.Threading
 
 open Types
 open Common
@@ -16,7 +16,6 @@ let main argv =
         Environment.Exit(1)
     
     let cmbx = MailboxProcessor<ContextTrackerMessage>.Start (serviceContextTrackerAgent messageLoop)
-    let hostandport = argv.[0], argv.[1]
     cmbx.Post ({host = argv.[0]; port = argv.[1]}|> AddFailoverCt)
     
     match cmbx.PostAndReply ReconnectCtx with
@@ -51,6 +50,9 @@ let main argv =
             |> List.iter(fun ctx -> 
                 smbx.Post {ctx = ctx; msg = (() |> NullMsg)})
             cmbx.Post KillAllCtx
+            // I have to give time for the sockets to close. Strangely, 
+            // I never had this issue during primary development
+            Thread.Sleep 500
             Environment.Exit(0)
         | ConsoleKey.A ->
             crlf ()
@@ -65,7 +67,7 @@ let main argv =
             |> List.iter (printfn "%A")
             controlLoop ()
         | ConsoleKey.S -> 
-            crlf ()
+            crlf () 
             sendMsg ()
             controlLoop ()
         | ConsoleKey.R ->

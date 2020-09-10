@@ -17,9 +17,11 @@ let serviceContextTrackerAgent msgLoop (mbx: CtxMailboxProcessor) =
         
         match msg with
         | AddCtx ctx ->
+            ctx.guid.ToString() |> printfn "Adding %s to context tracker"
             msgLoop mbx ctx |> Async.Start
             return! ctx::sCTL |> postLoop
         | RemoveCtx ctx ->
+            ctx.guid.ToString() |> printfn "Removing %s from context tracker" 
             return! sCTL |> List.filter (fun sctx -> ctx.guid <> sctx.guid) |> postLoop
         | GetCtx r ->
             r.Reply sCTL
