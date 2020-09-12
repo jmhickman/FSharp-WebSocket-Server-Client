@@ -3,7 +3,6 @@ open System.Threading
 
 open Types
 open Common
-open WebSocketMsgHandlers
 open MailboxOutgoingMessage
 open MailboxContextTracker
 
@@ -15,7 +14,7 @@ let main argv =
         printfn "Wrong number of arguments"
         Environment.Exit(1)
     
-    let cmbx = MailboxProcessor<ContextTrackerMessage>.Start (serviceContextTrackerAgent messageLoop)
+    let cmbx = MailboxProcessor<ContextTrackerMessage>.Start (serviceContextTrackerAgent)
     cmbx.Post ({host = argv.[0]; port = argv.[1]}|> AddFailoverCt)
     
     match cmbx.PostAndReply ReconnectCtx with
@@ -26,7 +25,7 @@ let main argv =
     
     let smbx = MailboxProcessor.Start outgoingWsMsgMailbox // since there's only one send-side Mailbox, this will probably be created in the Transceiver.
     
-    
+    let makeMore (str: string) (acc: string) = acc + str
     // Standin for the primary Transceiver send interface
     let sendMsg () =
         let currCtxs = cmbx.PostAndReply GetCtx
@@ -38,7 +37,9 @@ let main argv =
             let dctx = currCtxs |> List.filter( fun c -> c.guid = guid) |> List.head
             printf "Message $> "
             let msg = Console.ReadLine()
+            //let multiply = msg |> String.replicate 5000
             smbx.Post {ctx = dctx; msg = (msg |> TextMsg)}
+            //smbx.Post {ctx = dctx; msg = (multiply |> TextMsg)}
 
 
     // Basic control loop to interact with the server for testing

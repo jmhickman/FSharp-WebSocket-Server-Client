@@ -21,8 +21,7 @@ let createServiceCtx (ws: WebSocket) : ServiceContext =
 
 // This function is a concenience symbol for packing and sending the AddCtx
 // message to a MailboxProcessor Context Tracker.
-let postServiceCtxMsg 
-    (mbox: MailboxProcessor<ContextTrackerMessage>) 
-    (ctx: ServiceContext) 
-    = async {ctx |> AddCtx |> mbox.Post}
+let postServiceCtxMsg (mbox: CtxMailboxProcessor) (ctx: ServiceContext) = async {
+    ctx |> AddCtx |> mbox.Post
+    }
 

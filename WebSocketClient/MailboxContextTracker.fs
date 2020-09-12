@@ -5,6 +5,7 @@ open System.Threading
 
 open Types
 open Common
+open WebSocketMsgHandlers
 
 
 // This function attempts to activate a new WebSocket with the indicated Server
@@ -13,15 +14,17 @@ open Common
 // because this is actually more straightforward than setting up a Task timer.
 let connectClientWebSocket (ct, delay) : Async<ClientWebSocket option> =    
     let connectString = sprintf "ws://%s:%s/" ct.host ct.port |> Uri
-             
+    
     let connectAttempt delay = async {
         let cws = new ClientWebSocket()
+        //cws.Options.RemoteCertificateValidationCallback <- (fun _ _ _ _ -> true)
         do! Async.Sleep delay
         printfn "Connecting..."
         try
             do! cws.ConnectAsync(connectString, CancellationToken.None) |> Async.AwaitTask
             return cws |> Some
-        with _ -> 
+        with exn -> 
+            printfn "%A" exn.Message
             cws.Dispose() 
             return None
         }
@@ -54,16 +57,17 @@ let tryWebSocketConnection connectionTargets =
 // removed, or dropped. A list of active ServiceContexts will be returned on
 // request. The incoming message handler is asynchronously started when a new
 // WebSocket connection is successfully established.
-let serviceContextTrackerAgent msgLoop (mbx: CtxMailboxProcessor) =
+let serviceContextTrackerAgent (mbx: CtxMailboxProcessor) =
     let serviceContextList = []
     let targethosts = []
     
+
     let rec postLoop (ts: ConnectionTarget list, sctxs: ServiceContext list) = async {
         let! msg = mbx.Receive()
         
         match msg with
         | AddCtx ctx ->
-            msgLoop mbx ctx |> Async.Start
+            messageLoop mbx ctx |> Async.Start
             return! (ts, ctx::sctxs) |> postLoop
         | AddFailoverCt ctx -> return! (ctx :: ts, sctxs) |> postLoop
         | GetCt r -> 

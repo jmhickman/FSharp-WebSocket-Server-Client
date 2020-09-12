@@ -14,15 +14,6 @@ let unpackStringBytes bytearr count = Encoding.UTF8.GetString (bytearr, 0, count
 // The reverse of the above, also may be removed.
 let packStringBytes (s: string) = s |> Encoding.UTF8.GetBytes |> ArraySegment<byte>
 
-// This function handles the incoming message types. Will eventually be sub-
-// sumed into the higher Transceiver layer where deserialization will occur.
-let extractIncomingMsg (msg: CWebSocketMessage) = 
-    match msg with 
-    | TextMsg s   -> s
-    | BinaryMsg b -> BitConverter.ToString b
-    | NullMsg ()  -> ""
-
-
 // This function is a convenience symbol for closing WebSockets asynchronously.
 let closeWebSocket (ws: WebSocket) = async {
     do! ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None) 
@@ -30,28 +21,22 @@ let closeWebSocket (ws: WebSocket) = async {
     }
 
 
-// This MailboxProcessor handles incoming WebSocket protocol messages. For
-// now it just dumps things to the terminal. Eventually will expose messages
-// to the Transceiver above it.
-let incomingWsMsgMailboxAgent (mbox: MailboxProcessor<CWebSocketMessage>) = 
-    let rec messageLoop () = async {
-        let! msg = mbox.Receive()
-        extractIncomingMsg msg |> printfn "%s"
-        do! messageLoop ()
-        }
-    messageLoop ()
-
-
 // This function is the IO bondary between the underlaying OS WebSocket impl
-// and the application. At this stage, I'm not concerned about exceptions in
-// the underlying task or anything, so there's no try/with here.
+// and the application. Server has to have exception catching here, because 
+// there's some difference between how Kestrel does the Sockets and how Client-
+// WebSocket does it. 
 let receiveMsg (ws: WebSocket) : ServerMessageIncoming =
     let buf = Array.init 65536 byte |> ArraySegment<byte>
-    let res = 
-        ws.ReceiveAsync(buf, CancellationToken.None)
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
-    {receivedMsg = res; buffer = buf}
+    try
+        let res = 
+            ws.ReceiveAsync(buf, CancellationToken.None)
+            |> Async.AwaitTask
+            |> Async.RunSynchronously
+        {receivedMsg = res; buffer = buf}        
+    with exn -> 
+        (ws.GetHashCode(), exn.Message) ||> printfn "Connection %i closed unexpectedly: %s"
+        closeWebSocket ws |> Async.Start
+        {receivedMsg = WebSocketReceiveResult(0, WebSocketMessageType.Close, true); buffer = buf}
     
 
 // This function handles the incoming messages based on type, creating a
@@ -68,6 +53,27 @@ let sortAndPackMsg smsg : CWebSocketMessage =
         Array.truncate smsg.receivedMsg.Count smsg.buffer.Array 
         |> BinaryMsg
     | _ -> () |> NullMsg
+
+
+// This function handles the incoming message types. Will eventually be sub-
+// sumed into the higher Transceiver layer where deserialization will occur.
+let extractIncomingMsg (msg: CWebSocketMessage) = 
+    match msg with 
+    | TextMsg s   -> s
+    | BinaryMsg b -> BitConverter.ToString b
+    | NullMsg ()  -> ""
+
+
+// This MailboxProcessor handles incoming WebSocket protocol messages. For
+// now it just dumps things to the terminal. Eventually will expose messages
+// to the Transceiver above it.
+let incomingWsMsgMailboxAgent (mbox: MailboxProcessor<CWebSocketMessage>) = 
+    let rec messageLoop () = async {
+        let! msg = mbox.Receive()
+        extractIncomingMsg msg |> printfn "%s"
+        do! messageLoop ()
+        }
+    messageLoop ()
 
 
 // This function is the asynchronous core of the message receive logic. It 

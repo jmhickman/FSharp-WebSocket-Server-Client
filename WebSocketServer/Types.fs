@@ -1,4 +1,4 @@
-﻿module Types
+﻿namespace Types
 open System
 open System.Net.WebSockets
 
@@ -37,7 +37,7 @@ type CtxMailboxProcessor = MailboxProcessor<ContextTrackerMessage>
 
 // Describes a function interface capable of handling incoming messages. Mostly
 // for convenience.
-type IncomingMessageLoop = MailboxProcessor<ContextTrackerMessage> -> ServiceContext -> Async<unit>
+//type IncomingMessageLoop = MailboxProcessor<ContextTrackerMessage> -> ServiceContext -> Async<unit>
 
 // Describes the functional side of the domain boundary for sending a message
 // down into the .Net WebSocket handler.
