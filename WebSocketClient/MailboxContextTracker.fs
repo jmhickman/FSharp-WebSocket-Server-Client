@@ -5,7 +5,7 @@ open System.Threading
 
 open Types
 open Common
-open WebSocketMsgHandlers
+//open WebSocketMsgHandlers
 
 
 // This function attempts to activate a new WebSocket with the indicated Server
@@ -57,7 +57,10 @@ let tryWebSocketConnection connectionTargets =
 // removed, or dropped. A list of active ServiceContexts will be returned on
 // request. The incoming message handler is asynchronously started when a new
 // WebSocket connection is successfully established.
-let serviceContextTrackerAgent (mbx: CtxMailboxProcessor) =
+let serviceContextTrackerAgent 
+    (incomingLoop: IncomingMessageLoop)
+    (mbx: CtxMailboxProcessor) 
+    =
     let serviceContextList = []
     let targethosts = []
     
@@ -67,7 +70,7 @@ let serviceContextTrackerAgent (mbx: CtxMailboxProcessor) =
         
         match msg with
         | AddCtx ctx ->
-            messageLoop mbx ctx |> Async.Start
+            incomingLoop mbx ctx |> Async.Start
             return! (ts, ctx::sctxs) |> postLoop
         | AddFailoverCt ctx -> return! (ctx :: ts, sctxs) |> postLoop
         | GetCt r -> 
@@ -84,7 +87,7 @@ let serviceContextTrackerAgent (mbx: CtxMailboxProcessor) =
         | ReconnectCtx r -> 
             match tryWebSocketConnection ts with
             | Some c -> 
-                createServiceCtx c |> (postServiceCtxMsg mbx) |> Async.Start
+                createServiceCtx c |> mbx.Post
                 printfn "Connected"
                 r.Reply  Ok
             | None -> 

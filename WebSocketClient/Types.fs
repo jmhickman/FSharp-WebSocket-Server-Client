@@ -51,7 +51,7 @@ type CtxMailboxProcessor = MailboxProcessor<ContextTrackerMessage>
 
 // Describes a function interface capable of handling incoming messages. Mostly
 // for convenience.
-//type IncomingMessageLoop = CtxMailboxProcessor -> ServiceContext -> Async<unit>
+type IncomingMessageLoop = CtxMailboxProcessor -> ServiceContext -> Async<unit>
 
 // Describes the functional side of the domain boundary for sending a message
 // down into the .Net WebSocket handler.

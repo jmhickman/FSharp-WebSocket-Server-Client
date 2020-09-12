@@ -8,9 +8,8 @@
   <ItemGroup>
     <Compile Include="Types.fs" />
     <Compile Include="Common.fs" />
-    <Compile Include="WebSocketMsgHandlers.fs" />
-    <Compile Include="MailboxOutgoingMessage.fs" />
     <Compile Include="MailboxContextTracker.fs" />
+    <Compile Include="WebSocketMsgHandlers.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

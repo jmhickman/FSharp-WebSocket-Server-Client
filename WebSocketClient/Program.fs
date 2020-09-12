@@ -3,7 +3,7 @@ open System.Threading
 
 open Types
 open Common
-open MailboxOutgoingMessage
+open WebSocketMsgHandlers
 open MailboxContextTracker
 
 // this stuff is mostly a testing mess, and doesn't reflect anything about the final application. It's all harness and no order.
@@ -14,7 +14,7 @@ let main argv =
         printfn "Wrong number of arguments"
         Environment.Exit(1)
     
-    let cmbx = MailboxProcessor<ContextTrackerMessage>.Start (serviceContextTrackerAgent)
+    let cmbx = MailboxProcessor<ContextTrackerMessage>.Start (serviceContextTrackerAgent messageLoop)
     cmbx.Post ({host = argv.[0]; port = argv.[1]}|> AddFailoverCt)
     
     match cmbx.PostAndReply ReconnectCtx with

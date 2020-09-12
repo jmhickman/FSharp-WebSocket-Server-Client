@@ -21,6 +21,31 @@ let closeWebSocket (ws: WebSocket) = async {
     }
 
 
+// This function is a convenience symbol for sending a WebSocket message.
+// It is hardcoded to use the Binary message type because the application layer
+// protocol is entirely binary in nature. Deliberately not completely async.
+let CSendAsync (ws: WebSocket) (arr: ArraySegment<byte>) = 
+    ws.SendAsync (arr, WebSocketMessageType.Text, true, CancellationToken.None) 
+    |> Async.AwaitTask 
+    |> Async.RunSynchronously
+
+
+// This function has cases for handling the various outgoing message types.
+// For all practical purposes though, TextMsg is a dead branch and may
+// eventually be removed. The application will never intentially send a plain
+// text message in normal operation.
+let sendWebSocketMsg outMsg (ws: WebSocket) =
+    match outMsg with
+    | BinaryMsg m ->
+        let arr = m |> ArraySegment<byte>
+        CSendAsync ws arr
+    | TextMsg m  -> 
+        let arr = packStringBytes m
+        CSendAsync ws arr
+    | NullMsg _ -> 
+        closeWebSocket ws |> Async.Start
+
+
 // This function is the IO bondary between the underlaying OS WebSocket impl
 // and the application. Server has to have exception catching here, because 
 // there's some difference between how Kestrel does the Sockets and how Client-
@@ -96,3 +121,15 @@ let messageLoop
     sctx.ws |> closeWebSocket |> Async.Start
     sctx |> RemoveCtx |> mbx.Post
     }
+
+
+// This MailboxProcessor handles the outgoing message queue, using the 
+// information contained in a ServerMessageOutgoing to select the correct
+// ServiceContext to send the message to.
+let outgoingWsMsgMailboxAgent (mbox: MailboxProcessor<ServerMessageOutgoing>) = 
+    let rec messageLoop () = async {
+        let! smesgout =  mbox.Receive()
+        sendWebSocketMsg smesgout.msg smesgout.ctx.ws
+        do! messageLoop ()
+        }
+    messageLoop ()

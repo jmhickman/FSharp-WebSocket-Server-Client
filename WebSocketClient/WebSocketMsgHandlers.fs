@@ -21,6 +21,31 @@ let closeWebSocket (ws: WebSocket) = async {
     }
 
 
+// This function is a convenience symbol for sending a WebSocket message.
+// It is hardcoded to use the Binary message type because the application layer
+// protocol is entirely binary in nature. Deliberately not completely async.
+let CSendAsync (ws: WebSocket) (arr: ArraySegment<byte>) = 
+    ws.SendAsync (arr, WebSocketMessageType.Binary, true, CancellationToken.None) 
+    |> Async.AwaitTask 
+    |> Async.RunSynchronously
+
+
+// This function has cases for handling the various outgoing message types.
+// For all practical purposes though, TextMsg is a dead branch and may
+// eventually be removed. The application will never intentially send a plain
+// text message in normal operation.
+let sendWebSocketMsg outMsg (ws: WebSocket) =
+    match outMsg with
+    | BinaryMsg m ->
+        let arr = m |> ArraySegment<byte>
+        CSendAsync ws arr
+    | TextMsg m  -> 
+        let arr = packStringBytes m
+        CSendAsync ws arr
+    | NullMsg _ -> 
+        closeWebSocket ws |> Async.Start
+
+
 // This function is the IO bondary between the underlaying OS WebSocket impl
 // and the application. At this stage, I'm not concerned about exceptions in
 // the underlying task or anything, so there's no try/with here.
@@ -43,13 +68,13 @@ let sortAndPackMsg smsg : CWebSocketMessage =
     | WebSocketMessageType.Text   -> 
         unpackStringBytes smsg.buffer.Array smsg.receivedMsg.Count 
         |> TextMsg
-    | WebSocketMessageType.Binary -> 
+    | WebSocketMessageType.Binary -> // send to deserializer
         Array.truncate smsg.receivedMsg.Count smsg.buffer.Array 
         |> BinaryMsg
     | _ -> () |> NullMsg
 
 
-// This function handles the incoming message types. Will eventually be sub-
+(*// This function handles the incoming message types. Will eventually be sub-
 // sumed into the higher Transceiver layer where deserialization will occur.
 let extractIncomingMsg (msg: CWebSocketMessage) = 
     match msg with 
@@ -67,7 +92,7 @@ let incomingWsMsgMailbox (mbox: MailboxProcessor<CWebSocketMessage>) =
         extractIncomingMsg msg |> printfn "%s"
         do! messageLoop ()
         }
-    messageLoop ()
+    messageLoop ()*)
 
 
 // This function is the asynchronous core of the message receive logic. It 
@@ -78,10 +103,11 @@ let incomingWsMsgMailbox (mbox: MailboxProcessor<CWebSocketMessage>) =
 // to a ServiceContext, making each incoming WebSocket protocol connection its own
 // thread.
 let messageLoop (mbx: CtxMailboxProcessor) (sctx: ServiceContext) = async {
-    use imbx = MailboxProcessor.Start incomingWsMsgMailbox //the uplift for the Transceiver will need to be passed in here
+    //use imbx = MailboxProcessor.Start incomingWsMsgMailbox //the uplift for the Transceiver will need to be passed in here
     
-    Seq.initInfinite (fun _ -> receiveMsg sctx.ws |> sortAndPackMsg |> imbx.Post) 
+    Seq.initInfinite (fun _ -> receiveMsg sctx.ws |> sortAndPackMsg) //|> imbx.Post) 
     |> Seq.find (fun _ -> sctx.ws.State <> WebSocketState.Open)
+    |> ignore
     
     match sctx.ws.State with
     | WebSocketState.CloseReceived ->
@@ -99,3 +125,15 @@ let messageLoop (mbx: CtxMailboxProcessor) (sctx: ServiceContext) = async {
     | WebSocketState.Closed -> ()
     | _ -> printfn "Boom!"
     }
+
+
+// This MailboxProcessor handles the outgoing message queue, using the 
+// information contained in a ServerMessageOutgoing to select the correct
+// ServiceContext to send the message to.
+let outgoingWsMsgMailbox (mbox: MailboxProcessor<ServerMessageOutgoing>) = 
+    let rec messageLoop () = async {
+        let! smesgout =  mbox.Receive()
+        sendWebSocketMsg smesgout.msg smesgout.ctx.ws
+        do! messageLoop ()
+        }
+    messageLoop ()
