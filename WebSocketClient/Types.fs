@@ -23,12 +23,14 @@ type ConnectionAttemptResult =
 // Context Tracker mailbox. 
 type ContextTrackerMessage = 
     | AddCtx        of ServiceContext
-    | AddFailoverCt of ConnectionTarget
     | RemoveCtx     of ServiceContext
-    | ReconnectCtx  of AsyncReplyChannel<ConnectionAttemptResult>
-    | GetCt         of AsyncReplyChannel<ConnectionTarget list>
     | GetCtx        of AsyncReplyChannel<ServiceContext list>
     | KillAllCtx
+
+type ConnectionTrackerMessage = 
+    | AddFailoverCt of ConnectionTarget
+    | ReconnectCt  of AsyncReplyChannel<ConnectionAttemptResult>
+    | GetCt         of AsyncReplyChannel<ConnectionTarget list>
 
 // Describes the two types of WebSocket protocol messages at the functional 
 // side of the domain boundary, the contents, and a fallthrough type for other
@@ -41,17 +43,10 @@ type CWebSocketMessage =
 // Describes a .Net type and the raw buffer corresponding to the WebSocket
 // protocol message from the domain boundary.
 type ServerMessageIncoming = {
+    ctx         : ServiceContext
     receivedMsg : WebSocketReceiveResult
     buffer      : ArraySegment<byte>
     }
-
-// Shamelessly here just to make the function signature of the context tracker 
-// less terrible.
-type CtxMailboxProcessor = MailboxProcessor<ContextTrackerMessage>
-
-// Describes a function interface capable of handling incoming messages. Mostly
-// for convenience.
-type IncomingMessageLoop = CtxMailboxProcessor -> ServiceContext -> Async<unit>
 
 // Describes the functional side of the domain boundary for sending a message
 // down into the .Net WebSocket handler.
@@ -59,4 +54,40 @@ type ServerMessageOutgoing = {
     ctx : ServiceContext
     msg : CWebSocketMessage
     }
+
+// Describes all Domain messages, so any and all function can be mapped to a 
+// type. Various consumers can be addressed in the domain inbox based on the 
+// message type.
+type DomainMsgPayload = 
+    | AllMsg
+    | CloseMsg
+    | Console of string
+    | DeadMsg
+
+// Describes a basic concept of a domain record.
+type DomainMsg = {
+    ctx     : ServiceContext
+    msgType : DomainMsgPayload
+    }
+
+// Shamelessly here just to make the function signature of the context tracker 
+// less terrible.
+type CtxMailboxProcessor = MailboxProcessor<ContextTrackerMessage>
+
+type CtMailboxProcessor = MailboxProcessor<ConnectionTrackerMessage>
+
+type OutgoingMailboxProcessor = MailboxProcessor<ServerMessageOutgoing>
+
+type DomainMailboxProcessor = MailboxProcessor<DomainMsg>
+
+// Describes a function interface capable of handling incoming messages. Mostly
+// for convenience.
+type IncomingMessageLoop = DomainMailboxProcessor -> ServiceContext -> Async<unit>
+
+// Internal feature list
+type Complication = {
+    name        : string
+    messageType : DomainMsg list
+    }
+
 

@@ -1,24 +1,10 @@
 ﻿module WebSocketMsgHandlers
 open System
 open System.Net.WebSockets
-open System.Text
 open System.Threading
 
 open Types
-
-
-// This function is just a convenience symbol for the repetitive task of 
-// extracting a string from an incoming byte array. Might be removed eventually
-// when TextMsg is removed from the WebSocket comms layer.
-let unpackStringBytes bytearr count = Encoding.UTF8.GetString (bytearr, 0, count)
-
-// The reverse of the above, also may be removed.
-let packStringBytes (s: string) = s |> Encoding.UTF8.GetBytes |> ArraySegment<byte>
-
-// This function is a convenience symbol for closing WebSockets asynchronously.
-let closeWebSocket (ws: WebSocket) = async {
-    do! ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None) |> Async.AwaitTask
-    }
+open Common
 
 
 // This function is a convenience symbol for sending a WebSocket message.
@@ -28,6 +14,10 @@ let CSendAsync (ws: WebSocket) (arr: ArraySegment<byte>) =
     ws.SendAsync (arr, WebSocketMessageType.Binary, true, CancellationToken.None) 
     |> Async.AwaitTask 
     |> Async.RunSynchronously
+
+//
+// WebSocket send and receive functions
+//
 
 
 // This function has cases for handling the various outgoing message types.
@@ -41,99 +31,96 @@ let sendWebSocketMsg outMsg (ws: WebSocket) =
         CSendAsync ws arr
     | TextMsg m  -> 
         let arr = packStringBytes m
-        CSendAsync ws arr
+        CSendAsync ws (arr|> ArraySegment<byte>)
     | NullMsg _ -> 
-        closeWebSocket ws |> Async.Start
+        closeWebSocket ws |> Async.Start 
 
 
 // This function is the IO bondary between the underlaying OS WebSocket impl
-// and the application. At this stage, I'm not concerned about exceptions in
-// the underlying task or anything, so there's no try/with here.
-let receiveMsg (ws: WebSocket) : ServerMessageIncoming =
+// and the application. Server has to have exception catching here, because 
+// there's some difference between how Kestrel does the Sockets and how Client-
+// WebSocket does it. 
+let receiveMsg (sctx: ServiceContext) : ServerMessageIncoming =
     let buf = Array.init 65536 byte |> ArraySegment<byte>
-    let res = 
-        ws.ReceiveAsync(buf, CancellationToken.None)
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
-    {receivedMsg = res; buffer = buf}        
+    try
+        let res = 
+            sctx.ws.ReceiveAsync(buf, CancellationToken.None)
+            |> Async.AwaitTask
+            |> Async.RunSynchronously
+        {ctx =  sctx; receivedMsg = res; buffer = buf}        
+    with exn -> 
+        (sctx.ws.GetHashCode(), exn.Message) ||> printfn "Connection %i closed unexpectedly: %s"
+        {ctx = sctx; receivedMsg = WebSocketReceiveResult(0, WebSocketMessageType.Close, true); buffer = buf}
     
 
-// This function handles the incoming messages based on type, creating a
-// corresponding CWebSocketMessage with the original contents. The TextMsg
-// path will eventually be culled. The fallthrough branch might be better 
-// leveraged eventually.
-let sortAndPackMsg smsg : CWebSocketMessage =
+// Funtion to take raw websocket message and deserialize and pack it into a 
+// DomainMsg. Text messages are now a dead codepath and will be ignored.
+let deserializeToDomainMsg smsg =
     match smsg.receivedMsg.MessageType with
-    | WebSocketMessageType.Close  -> () |> NullMsg
-    | WebSocketMessageType.Text   -> 
-        unpackStringBytes smsg.buffer.Array smsg.receivedMsg.Count 
-        |> TextMsg
-    | WebSocketMessageType.Binary -> // send to deserializer
-        Array.truncate smsg.receivedMsg.Count smsg.buffer.Array 
-        |> BinaryMsg
-    | _ -> () |> NullMsg
+    | WebSocketMessageType.Close  -> {ctx = smsg.ctx; msgType = CloseMsg}
+    | WebSocketMessageType.Text   -> {ctx = smsg.ctx; msgType = DeadMsg}
+    | WebSocketMessageType.Binary -> 
+        let str = Array.truncate smsg.receivedMsg.Count smsg.buffer.Array |> BitConverter.ToString |> Console
+        {ctx = smsg.ctx; msgType = str }
+    | _ -> {ctx = smsg.ctx; msgType = DeadMsg}
 
 
-(*// This function handles the incoming message types. Will eventually be sub-
-// sumed into the higher Transceiver layer where deserialization will occur.
-let extractIncomingMsg (msg: CWebSocketMessage) = 
-    match msg with 
-    | TextMsg s   -> s
-    | BinaryMsg b -> BitConverter.ToString b
-    | NullMsg ()  -> ""
-
-
-// This MailboxProcessor handles incoming WebSocket protocol messages. For
-// now it just dumps things to the terminal. Eventually will expose messages
-// to the Transceiver above it.
-let incomingWsMsgMailbox (mbox: MailboxProcessor<CWebSocketMessage>) = 
+// This MailboxProcessor handles incoming WebSocket protocol messages. 
+// Eventually will handle other functions.
+let incomingWsMsgMailbox 
+    (dimbx: DomainMailboxProcessor)
+    (mbox: MailboxProcessor<DomainMsg>) = 
+    
     let rec messageLoop () = async {
         let! msg = mbox.Receive()
-        extractIncomingMsg msg |> printfn "%s"
+        msg |> dimbx.Post
         do! messageLoop ()
         }
-    messageLoop ()*)
+    messageLoop ()
 
+// Creates the MailboxProcessor and passes it back. Used in Program.fs in order
+// to pass to various consumers and/or complications.
+let getInbox dimbx = 
+    MailboxProcessor.Start (incomingWsMsgMailbox dimbx )
+    
+    
+//
+// WebSocket incoming loop and outgoing mailbox
+//
 
 // This function is the asynchronous core of the message receive logic. It 
 // sets up a spinner that monitors for incoming WebSocket protocol messages and
 // controls what occurs when the WebSocket is closed or collapses. Is called
 // from and communicates with the MailboxProcessor ServiceContext tracker, 
-// while also starting an incoming MailboxProcessor. Each of these is unique
-// to a ServiceContext, making each incoming WebSocket protocol connection its own
-// thread.
-let messageLoop (mbx: CtxMailboxProcessor) (sctx: ServiceContext) = async {
-    //use imbx = MailboxProcessor.Start incomingWsMsgMailbox //the uplift for the Transceiver will need to be passed in here
+// while also starting an incoming MailboxProcessor. Each of these is unique 
+// to a ServiceContext, making each WebSocket protocol connection its own 
+// thread. Less complex than the Client equivalent, since the server doesn't
+// attempt to re-establish connections with clients.
+let messageLoop 
+    (dimbx: DomainMailboxProcessor)
+    (sctx: ServiceContext) 
+    = async {
+    use imbx = getInbox dimbx
     
-    Seq.initInfinite (fun _ -> receiveMsg sctx.ws |> sortAndPackMsg) //|> imbx.Post) 
+    Seq.initInfinite (fun _ -> receiveMsg sctx |> deserializeToDomainMsg |> imbx.Post) 
     |> Seq.find (fun _ -> sctx.ws.State <> WebSocketState.Open)
-    |> ignore
-    
-    match sctx.ws.State with
-    | WebSocketState.CloseReceived ->
-        printfn "Close socket message received"
-        sctx.ws |> closeWebSocket |> Async.Start
-        sctx |> RemoveCtx |> mbx.Post
-        printfn "Socket connection terminated."
-    | WebSocketState.Aborted -> 
-        printfn "Abort detected"
-        mbx.Post (sctx |> RemoveCtx)
-        printfn "Disposing WebSocket"
-        sctx.ws.Dispose()
-        printfn "Attempting reconnections"
-        mbx.PostAndReply ReconnectCtx |> ignore
-    | WebSocketState.Closed -> ()
-    | _ -> printfn "Boom!"
+    closeWebSocket sctx.ws |> Async.Start
     }
 
 
 // This MailboxProcessor handles the outgoing message queue, using the 
 // information contained in a ServerMessageOutgoing to select the correct
 // ServiceContext to send the message to.
-let outgoingWsMsgMailbox (mbox: MailboxProcessor<ServerMessageOutgoing>) = 
+let outgoingWsMsgMailbox (mbox: OutgoingMailboxProcessor) = 
     let rec messageLoop () = async {
         let! smesgout =  mbox.Receive()
+        newline ()
         sendWebSocketMsg smesgout.msg smesgout.ctx.ws
         do! messageLoop ()
         }
     messageLoop ()
+
+// Creates the MailboxProcessor and passes it back. Used in Program.fs in order
+// to pass to various consumers and/or complications.
+let getOutbox () = 
+    MailboxProcessor.Start outgoingWsMsgMailbox

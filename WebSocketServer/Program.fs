@@ -1,30 +1,67 @@
 ﻿open System
+open System.Net.WebSockets
 open System.Threading.Tasks
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Hosting
 
 open Types
 open Common
+open Console
+open MailboxDomainIncoming
+open MailboxDomainOutgoing
 open WebSocketMsgHandlers
 open MailboxContextTracker
 
 
-let smbx = MailboxProcessor.Start outgoingWsMsgMailboxAgent
-let cmbx = MailboxProcessor.Start (serviceContextTracker messageLoop)
+// create mailboxes
+// Outbox is the DTO layer outbound to the underlying WebSocket transport
+// CtxBox is the ContextTracker, so that complications can determine who
+// to address DomainMsgs to.
+// DomainOutbox is the in-domain handler of Outbound DomainMsgs
+let ombx = getOutbox ()
+let cmbx = getCtxbox ()
+let dombx = getDomainOutbox ombx
 
-// Gross OP that's required to run the Asp.net Core Kestrel server.
+// init other 'services'
+controlLoop cmbx dombx |> Async.Start
+
+let complications = []
+// Once the list of complications is known, it is passed to the Domain inbox
+// so that it can determine which complication to send the messages to.
+let dimbx = getDomainInbox complications dombx
+
+// Gross OP that's required to run the Asp.net Core Kestrel server. Due to
+// how dumb this initialization process is, I can't cleanly move this down
+// into the Types area, because it has to know about the CtxMailbox, but it
+// seemingly has no way to take in arbitrary arguments/dependencies.
 type Startup() = 
     member this.Configure (app : IApplicationBuilder) = 
         app.UseWebSockets() |> ignore
         app.Run (fun ctx -> 
-            let ws = ctx.WebSockets.AcceptWebSocketAsync().Result
-            printfn "Connection incoming..."
-            ws |> createServiceCtx |> cmbx.Post 
+            let sctx = 
+                ctx.WebSockets.AcceptWebSocketAsync().Result
+                |> createServiceCtx
+            //printfn "Connection incoming..."
             
-            infiniSpin ws
+            sctx |> AddCtx |> cmbx.Post 
+            sctx |> messageLoop dimbx |> Async.Start
+            
+            let rec infiniSpin (sctx: ServiceContext) = async {
+                do! Async.Sleep 2500
+                if sctx.ws.State = WebSocketState.Open then
+                    do! infiniSpin sctx
+                else 
+                    //sctx.guid.ToString() |> printfn "Session %s closed"
+                    sctx |> RemoveCtx |> cmbx.Post
+                    sctx.ws.Dispose()
+                }   
+
+            infiniSpin sctx
             |> Async.StartAsTask :> Task
             )
 
+
+// Webserver kickoff
 let application uri = async { 
     WebHostBuilder()
     |> fun x -> x.UseKestrel()
@@ -39,19 +76,6 @@ let application uri = async {
             Environment.Exit(1)
     }
 
-let sendMsg () =
-    let currCtxs = cmbx.PostAndReply GetCtx
-    if currCtxs.Length = 0 then printfn "No clients!"
-    else 
-        printfn "Select a client: "
-        currCtxs |> List.iter (fun c -> printfn "%s" <| c.guid.ToString())
-        let guid = Console.ReadLine() |> Guid
-        let dctx = currCtxs |> List.filter( fun c -> c.guid = guid) |> List.head
-        printf "Message $> "
-        let msg = Console.ReadLine()
-        //let multiply = msg |> String.replicate 5000
-        smbx.Post {ctx = dctx; msg = (msg |> TextMsg)}
-        //smbx.Post {ctx = dctx; msg = (multiply |> TextMsg)}
 
 [<EntryPoint>]
 let main argv =
@@ -62,30 +86,13 @@ let main argv =
     let uri = [|sprintf "http://%s:%s" argv.[0] argv.[1]|]
     
     application uri |> Async.Start
+    
+    // Do nothing on a long schedule. Just here so that the program doesn't 
+    // terminate until ended in another portion of the app.
+    let rec idleloop () = async {
+        do! Async.Sleep 600000
+        do! idleloop ()
+        }
 
-    // Basic control loop to interact with the server for testing
-    let rec controlLoop () =
-        match Console.ReadKey().Key with
-        | ConsoleKey.Q -> 
-            crlf ()
-            cmbx.PostAndReply GetCtx
-            |> List.iter(fun ctx -> 
-                printfn "sending NullMsg to %i" <| ctx.ws.GetHashCode()
-                smbx.Post {ctx = ctx; msg = (() |> NullMsg)})
-            cmbx.PostAndReply KillAllCtx |> ignore
-            Environment.Exit(0)
-        | ConsoleKey.S -> 
-            crlf ()
-            sendMsg ()
-            controlLoop ()
-        | ConsoleKey.P ->
-            crlf ()
-            cmbx.PostAndReply GetCtx
-            |> List.iter (fun ctx -> ctx.guid.ToString() |> printfn "%s")
-            controlLoop ()
-        | _            -> 
-            crlf ()
-            controlLoop ()
-
-    controlLoop ()
+    idleloop () |> Async.RunSynchronously
     0 // return an integer exit code

@@ -1,17 +1,5 @@
 ﻿module MailboxContextTracker
-open System.Net.WebSockets
-
 open Types
-
-
-
-// This function is designed to nothing, with as relatively low an impact as
-// possible. It only exists because the Asp.Net Core middleware will 
-// automatically close any websocket as soon as the Async/Task completes.
-// This this just does nothing until the WebSocket is closed elsewere in the
-// stack. It's stupid as hell, but then the requirement is stupid as hell too.
-
-
 
 // A MailboxProcessor that contains and controls the shared state of the 
 // WebSocket connections, called ServiceContexts. It tracks active 
@@ -22,7 +10,6 @@ open Types
 // doesn't track previous sessions nor does it contain the notion of future
 // connections.
 let serviceContextTracker 
-    (incomingLoop: IncomingMessageLoop)
     (mbx: CtxMailboxProcessor) =
     let serviceContextList = []
     
@@ -32,7 +19,6 @@ let serviceContextTracker
         match msg with
         | AddCtx ctx ->
             ctx.guid.ToString() |> printfn "Adding %s to context tracker"
-            incomingLoop mbx ctx |> Async.Start
             return! ctx::sCTL |> postLoop
         | RemoveCtx ctx ->
             ctx.guid.ToString() |> printfn "Removing %s from context tracker" 
@@ -47,6 +33,7 @@ let serviceContextTracker
         
     postLoop serviceContextList
 
-
-
-
+// Creates the MailboxProcessor and passes it back. Used in Program.fs in order
+// to pass to various consumers and/or complications.
+let getCtxbox () = MailboxProcessor.Start serviceContextTracker
+    
