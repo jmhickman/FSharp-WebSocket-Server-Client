@@ -17,9 +17,9 @@ let main argv =
     
     // Initialization stuff. Unlike the server, the context and connection 
     // trackers are separate in order to deal with cyclic dependency issues.
-    // Complications are consumers of DomainMsg record from the DomainInbox.
-    // The outbox is a protocol-level send mechanism
-    // the domain outbox is the handler for complications wanting to send
+    // Complications are consumers of DomainMsg records from the DomainInbox.
+    // The outbox is a protocol-level send mechanism 
+    // The domain outbox is the handler for complications wanting to send
     // messages out of the domain.
     // The Ctx mailbox is the Context Tracker.
     // The domain inbox is for DomainMsg records that have come in from the
@@ -34,7 +34,7 @@ let main argv =
     let ctmbx = getCtbox dimbx cmbx
     
     // Place the initial target host into the tracker.
-    ctmbx.Post ({host = argv.[0]; port = argv.[1]}|> AddFailoverCt)
+    {host = argv.[0]; port = argv.[1]}|> AddFailoverCt |> ctmbx.Post 
     
     // Kick off initial connection attempts. Bails out if it can't connect.
     match ctmbx.PostAndReply ReconnectCt with

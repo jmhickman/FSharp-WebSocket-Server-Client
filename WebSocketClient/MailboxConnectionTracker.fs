@@ -49,6 +49,9 @@ let tryWebSocketConnection connectionTargets =
     |> List.tryPick(fun ct -> (connectClientWebSocket ct |> Async.RunSynchronously))
 
 
+// The client needs additional functionality to manage connections, so that
+// is done here. Broken out of the ContextTracker because of cyclic dep issues
+// Works similarly; a recursive function that passes a list to itself.
 let serviceConnectionTrackerAgent 
     (dimbx: DomainMailboxProcessor)
     (ctxmbx: CtxMailboxProcessor)
