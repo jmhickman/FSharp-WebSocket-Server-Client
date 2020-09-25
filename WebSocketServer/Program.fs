@@ -22,7 +22,7 @@ let ombx = getOutbox ()
 let cmbx = getCtxbox ()
 let dombx = getDomainOutbox ombx
 
-// init other 'services'
+
 controlLoop cmbx dombx |> Async.Start
 
 let complications = []
@@ -41,7 +41,6 @@ type Startup() =
             let sctx = 
                 ctx.WebSockets.AcceptWebSocketAsync().Result
                 |> createServiceCtx
-            //printfn "Connection incoming..."
             
             sctx |> AddCtx |> cmbx.Post 
             sctx |> messageLoop dimbx |> Async.Start
@@ -51,7 +50,6 @@ type Startup() =
                 if sctx.ws.State = WebSocketState.Open then
                     do! infiniSpin sctx
                 else 
-                    //sctx.guid.ToString() |> printfn "Session %s closed"
                     sctx |> RemoveCtx |> cmbx.Post
                     sctx.ws.Dispose()
                 }   

@@ -62,8 +62,8 @@ type OutgoingMailboxProcessor = MailboxProcessor<ServerMessageOutgoing>
 
 type DomainMailboxProcessor = MailboxProcessor<DomainMsg>
 
-// Describes a function interface capable of handling incoming messages. Mostly
-// for convenience.
+// Describes a function interface capable of handling incoming messages. Helps
+// with dependency loops.
 type IncomingMessageLoop = MailboxProcessor<ContextTrackerMessage> -> ServiceContext -> Async<unit>
 
 // Internal feature list
