@@ -1,8 +1,4 @@
 ﻿module MailboxContextTracker
-open System
-open System.Net.WebSockets
-open System.Threading
-
 open Types
 
 // A MailboxProcessor that contains and controls the shared state of the 
