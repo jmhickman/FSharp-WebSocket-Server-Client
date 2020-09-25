@@ -62,13 +62,6 @@ let configureKestrel (host: string, port: string) (options : KestrelServerOption
     options.Listen(addr, iport, fun listenOptions -> listenOptions.UseHttps(serverCert) |> ignore)
 
 
-// This function is designed to nothing, with as relatively low an impact as
-// possible. It only exists because the Asp.Net Core middleware will 
-// automatically close any WebSocket as soon as the Async/Task completes.
-// This just does nothing until the WebSocket is closed elsewere in the
-// stack. It's stupid as hell, but then the requirement is stupid as hell too.
-
-
 // Unused, but if more sophisticated steps are needed for outgoing messages, 
 // they could happen here.
 let toDTO (ctx: ServiceContext) (dmsg: DomainMsg) = 
