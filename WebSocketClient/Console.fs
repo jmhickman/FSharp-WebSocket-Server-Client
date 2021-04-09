@@ -5,7 +5,13 @@ open Types
 open Common
 
 // Basic control loop to illustrate consuming the domain mailbox resources.
-let rec controlLoop (cmbx: CtxMailboxProcessor) (ctmbx: CtMailboxProcessor) (dombx: DomainMailboxProcessor) = async {
+
+let rec controlLoop 
+    (cmbx: CtxMailboxProcessor) 
+    (ctmbx: CtMailboxProcessor) 
+    (dombx: DomainMailboxProcessor) 
+    = async {
+
     printf "$>"
     match Console.ReadKey().Key with
     | ConsoleKey.Q -> 
@@ -39,7 +45,7 @@ let rec controlLoop (cmbx: CtxMailboxProcessor) (ctmbx: CtMailboxProcessor) (dom
             let dctx = currCtxs |> List.filter( fun c -> c.guid = guid) |> List.head
             printf "Message $> "
             let msg = Console.ReadLine()
-            let multiply = msg |> String.replicate 5000
+            let multiply = msg |> String.replicate 500000 |> String.replicate 100
             //dombx.Post {ctx = dctx; msgType = (msg |> Console)}
             dombx.Post {ctx = dctx; msgType = (multiply |> Console)}
         do! controlLoop cmbx ctmbx dombx

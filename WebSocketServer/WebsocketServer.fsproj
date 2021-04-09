@@ -9,9 +9,9 @@
     <Compile Include="Types.fs" />
     <Compile Include="Common.fs" />
     <Compile Include="Console.fs" />
-    <Compile Include="MailboxDomainIncoming.fs" />
-    <Compile Include="MailboxDomainOutgoing.fs" />
-    <Compile Include="MailboxContextTracker.fs" />
+    <Compile Include="IncomingMessageAgent.fs" />
+    <Compile Include="OutgoingMessageAgent.fs" />
+    <Compile Include="ProtocolContextTracker.fs" />
     <Compile Include="WebSocketMsgHandlers.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

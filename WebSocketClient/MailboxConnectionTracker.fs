@@ -11,10 +11,11 @@ open WebSocketMsgHandlers
 // Cleans up the ClientWebSocket if the attempt creates an exception. Designed
 // to require a delay to facilitate repeated attempts. Implemented in a try
 // because this is actually more straightforward than setting up a Task timer.
+
 let connectClientWebSocket (ct, delay) : Async<ClientWebSocket option> =    
     let connectString = sprintf "ws://%s:%s/" ct.host ct.port |> Uri
     
-    let connectAttempt delay = async {
+    let connectAttempt (delay: int) = async {
         let cws = new ClientWebSocket()
         //cws.Options.RemoteCertificateValidationCallback <- (fun _ _ _ _ -> true)
         do! Async.Sleep delay
@@ -34,6 +35,7 @@ let connectClientWebSocket (ct, delay) : Async<ClientWebSocket option> =
 // singlely to the connection attempt function. The notion of the number of 
 // attempts for a given Server is encoded in the number of times the Server's
 // entries appear in the list.
+
 let generateTargetsWithDelays attempts delay connectionTargets =
     connectionTargets 
     |> List.map(fun c -> [for idx in [1..attempts] do yield (c, (idx * delay)) ])
@@ -43,6 +45,7 @@ let generateTargetsWithDelays attempts delay connectionTargets =
 // This function is a simple alias fully applying a default delay and number of
 // connection attempts. Designed to stop the first time we get a Some so that
 // repeated connections after the first successful one are prohibited.
+
 let tryWebSocketConnection connectionTargets =
     connectionTargets 
     |> generateTargetsWithDelays 4 500
@@ -52,6 +55,7 @@ let tryWebSocketConnection connectionTargets =
 // The client needs additional functionality to manage connections, so that
 // is done here. Broken out of the ContextTracker because of cyclic dep issues
 // Works similarly; a recursive function that passes a list to itself.
+
 let serviceConnectionTrackerAgent 
     (dimbx: DomainMailboxProcessor)
     (ctxmbx: CtxMailboxProcessor)
@@ -86,5 +90,6 @@ let serviceConnectionTrackerAgent
 
 // Creates the MailboxProcessor and passes it back. Used in Program.fs in order
 // to pass to various consumers and/or complications.
+
 let getCtbox (dimbx: DomainMailboxProcessor) (ctxmbx: CtxMailboxProcessor) = 
     MailboxProcessor.Start (serviceConnectionTrackerAgent dimbx ctxmbx)

@@ -8,6 +8,7 @@ open Types
 // removed, or dropped. A list of active ServiceContexts will be returned on
 // request. The incoming message handler is asynchronously started when a new
 // WebSocket connection is successfully established.
+
 let serviceContextTrackerAgent 
     (mbx: CtxMailboxProcessor) 
     =
@@ -32,4 +33,5 @@ let serviceContextTrackerAgent
 
 // Creates the MailboxProcessor and passes it back. Used in Program.fs in order
 // to pass to various consumers and/or complications.
+
 let getCtxbox () = MailboxProcessor.Start serviceContextTrackerAgent

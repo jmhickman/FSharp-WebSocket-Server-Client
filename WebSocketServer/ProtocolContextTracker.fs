@@ -1,16 +1,14 @@
-﻿module MailboxContextTracker
+﻿module ProtocolContextTracker
 open Types
 
 // A MailboxProcessor that contains and controls the shared state of the 
-// WebSocket connections, called ServiceContexts. It tracks active 
-// ServiceContexts ServiceContexts may be added, removed, or dropped. A list of
-// active ServiceContexts will be returned on request. The incoming message 
-// handler is asynchronously started when a new WebSocket connection is 
-// successfully established. More simple than its Client counterpart, as it 
-// doesn't track previous sessions nor does it contain the notion of future
-// connections.
-let serviceContextTracker 
-    (mbx: CtxMailboxProcessor) =
+// WebSocket connections, called ServiceContexts. 
+// 
+// ServiceContexts may be added, removed, or a list of them returned.
+// All active contexts may also be terminated as a group during shutdown.
+
+
+let serviceContextTracker (mbx: CtxMailboxProcessor) =
     let serviceContextList = []
     
     let rec postLoop (sCTL: ServiceContext list) = async {
@@ -35,5 +33,6 @@ let serviceContextTracker
 
 // Creates the MailboxProcessor and passes it back. Used in Program.fs in order
 // to pass to various consumers and/or complications.
-let getCtxbox () = MailboxProcessor.Start serviceContextTracker
+
+let startProtocolContextTracker () = MailboxProcessor.Start serviceContextTracker
     

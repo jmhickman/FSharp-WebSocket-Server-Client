@@ -26,6 +26,7 @@ let main argv =
     // protocol layer.
     // And finally, the Ct mailbox is for the client to manage its active and
     // potential server connections and is unique to the client code.
+
     let complications = []
     let ombx = getOutbox ()
     let dombx = getDomainOutbox ombx
@@ -34,24 +35,17 @@ let main argv =
     let ctmbx = getCtbox dimbx cmbx
     
     // Place the initial target host into the tracker.
+
     {host = argv.[0]; port = argv.[1]}|> AddFailoverCt |> ctmbx.Post 
     
     // Kick off initial connection attempts. Bails out if it can't connect.
+
     match ctmbx.PostAndReply ReconnectCt with
     | Ok _ -> ()
     | Failed -> 
         printfn "Failed to connect to initial server(s)"
         Environment.Exit(1)
     
-    controlLoop cmbx ctmbx dombx |> Async.Start
-
-    // Do nothing on a long schedule. Just here so that the program doesn't 
-    // terminate until ended in another portion of the app.
-    let rec idleloop () = async {
-        do! Async.Sleep 600000
-        do! idleloop ()
-        }
-
-    idleloop () |> Async.RunSynchronously
+    controlLoop cmbx ctmbx dombx |> Async.RunSynchronously
 
     0 // return an integer exit code
