@@ -1,5 +1,7 @@
 # WebSocket-ServerClient
 
+** This 'lineage' of the project is dropped, and I will be doing it again (for the 4th time) this time from TcpClient, so that I can get rid of the hideous Kestrel junk that I hate so much.**
+
 ## Purpose
 
 An exploration of a WebSocket server and client in F#.
